@@ -1,0 +1,52 @@
+site_name: tfs-mt
+repo_url: https://github.com/Giovo17/tfs-mt
+site_url: https://giovo17.github.io/tfs-mt
+site_description: Transformer from scratch for Machine Translation
+site_author: Giovanni Spadaro
+edit_uri: edit/main/docs/
+repo_name: Giovo17/tfs-mt
+copyright: Maintained by <a href="https://giovannispadaro.it">Giovanni Spadaro</a>.
+
+nav:
+  - Home: index.md
+  - Modules: modules.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["tfs_mt"]
+theme:
+  name: material
+  feature:
+    tabs: true
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: default
+      primary: white
+      accent: deep green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Giovo17/tfs-mt
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/tfs-mt
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
