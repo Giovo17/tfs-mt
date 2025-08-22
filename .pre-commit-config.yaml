@@ -20,7 +20,9 @@ repos:
       # Run the linter excluding ipynb.
       - id: ruff
         types_or: [ python, pyi ]
-        args: [ --fix --ignore=C901 ]
+        args:
+          - --fix
+          - --ignore=C901
       # Run the formatter excluding ipynb.
       - id: ruff-format
         types_or: [ python, pyi ]
