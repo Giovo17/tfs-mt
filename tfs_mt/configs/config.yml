@@ -1,0 +1,82 @@
+project: tfs_mt
+
+seed: 42
+
+sos_token: "<s>"
+eos_token: "</s>"
+pad_token: "<pad>"
+unk_token: "<unk>"
+
+
+model_base_name: tfs_mt
+model_parameters:
+  dropout: 0.1
+  tokenizer_max_len: 128
+
+model_configs:
+  nano:
+    d_model: 128
+    static_word_embeddings_dim: 50
+    num_heads: 2
+    num_encoder_layers: 2
+    num_decoder_layers: 2
+    d_mlp: 200
+  small:
+    d_model: 256
+    static_word_embeddings_dim: 100
+    num_heads: 4
+    num_encoder_layers: 4
+    num_decoder_layers: 4
+    d_mlp: 400
+  base:
+    d_model: 512
+    static_word_embeddings_dim: 200
+    num_heads: 8
+    num_encoder_layers: 6
+    num_decoder_layers: 6
+    d_mlp: 800
+  pretrained_word_embeddings: "GloVe"  # [GloVe, Word2Vec]
+  positional_embeddings: "sinusoidal"
+
+
+training_hp:
+  num_epochs: 100
+  calculate_metrics: True
+  load_checkpoint:
+    load_full_checkpoint: False
+    load_model_only: False
+    load_checkpoint_path: None
+
+  loss_type: crossentropy
+  loss_args: None
+
+  optimizer_type: adamw
+  optimizer_args:
+    learning_rate: 5e-2
+    weight_decay: 1e-3
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1e-8
+
+
+dataset:
+  dataset_task: machine-translation
+  dataset_id: "Helsinki-NLP/europarl"
+  dataset_name: "en-it"
+  train_split: 0.8
+  test_split: 0.2
+  src_lang: "en"
+  tgt_lang: "it"
+
+train_dataloader:
+  batch_size: 32
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+
+test_dataloader:
+  batch_size: 32
+  shuffle: False
+  num_workers: 4
+  prefetch_factor: 4
+  drop_last: False
