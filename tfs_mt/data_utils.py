@@ -1,5 +1,4 @@
 import os
-import re
 import zipfile
 from collections import Counter
 from multiprocessing import Pool
@@ -60,16 +59,31 @@ def parse_glove_tokens(lines: list[str]) -> list[str]:
 class TransformerTokenizer:
     """Transformer tokenizer"""
 
-    def __init__(self, special_tokens=None, num_workers=4):
+    def __init__(
+        self,
+        special_tokens: dict[str, str] | None = None,
+        contractions: dict[str, str] | None = None,
+        num_workers: int = 4,
+    ):
+        self.vocab = []
+        self.token_to_idx = {}
+        self.idx_to_token = {}
         self.special_tokens = special_tokens or {
             "sos_token": CONFIG["sos_token"],
             "eos_token": CONFIG["eos_token"],
             "pad_token": CONFIG["pad_token"],
             "unk_token": CONFIG["unk_token"],
         }
-        self.vocab = []
-        self.token_to_idx = {}
-        self.idx_to_token = {}
+        self.contractions = contractions or {
+            "'s": " 's",
+            "'t": " 't",
+            "'re": " 're",
+            "'ve": " 've",
+            "'m": " 'm",
+            "'ll": " 'll",
+            "'d": " 'd",
+            "n't": " n't",
+        }
         self.num_workers = num_workers
 
     @property
@@ -106,22 +120,12 @@ class TransformerTokenizer:
             List[str]: List of string tokens from text.
         """
 
-        text = text.lower()
+        text = text.strip().lower()
 
-        contractions = {
-            "'s": " 's",
-            "'t": " 't",
-            "'re": " 're",
-            "'ve": " 've",
-            "'m": " 'm",
-            "'ll": " 'll",
-            "'d": " 'd",
-            "n't": " n't",
-        }
-        for contraction, replacement in contractions.items():
+        for contraction, replacement in self.contractions.items():
             text = text.replace(contraction, replacement)
 
-        tokens = re.findall(r"\b\w+\b", text)
+        tokens = text.split()
 
         return [token[:1000] for token in tokens]
 
@@ -200,13 +204,13 @@ class TransformerTokenizer:
             zip_path = data_path + f"/{glove_version}.zip"
 
             try:
-                glove_file = None
+                glove_filepath = None
                 for file in os.listdir(glove_folder_path):
                     if file.endswith(".txt"):
-                        glove_file = os.path.join(glove_folder_path, file)
+                        glove_filepath = os.path.join(glove_folder_path, file)
                         break
 
-                if glove_file is None:
+                if glove_filepath is None:
                     print(f"GloVe not found in {glove_folder_path}. Downloading...")
 
                     url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
@@ -224,12 +228,12 @@ class TransformerTokenizer:
 
                     for file in os.listdir(glove_folder_path):
                         if file.endswith(".txt"):
-                            glove_file = os.path.join(glove_folder_path, file)
+                            glove_filepath = os.path.join(glove_folder_path, file)
                             break
 
                 print(f"Loading GloVe {glove_version} embeddings in parallel...")
 
-                with open(glove_file, encoding="utf-8") as f:
+                with open(glove_filepath, encoding="utf-8") as f:
                     lines = f.readlines()
 
                 # Split GloVe file lines into chunks and assign them to CPU threads
@@ -315,13 +319,13 @@ class TransformerTokenizer:
             os.makedirs(glove_folder_path, exist_ok=True)
 
             try:
-                glove_file = None
+                glove_filepath = None
                 for file in os.listdir(glove_folder_path):
                     if file.endswith(".txt"):
-                        glove_file = os.path.join(glove_folder_path, file)
+                        glove_filepath = os.path.join(glove_folder_path, file)
                         break
 
-                if glove_file is None:
+                if glove_filepath is None:
                     print(f"GloVe not found in {glove_folder_path}. Downloading GloVe ({glove_version})...")
 
                     url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
@@ -339,12 +343,12 @@ class TransformerTokenizer:
 
                     for file in os.listdir(glove_folder_path):
                         if file.endswith(".txt"):
-                            glove_file = os.path.join(glove_folder_path, file)
+                            glove_filepath = os.path.join(glove_folder_path, file)
                             break
 
                 print(f"Loading GloVe {glove_version} tokens from file...")
 
-                with open(glove_file, encoding="utf-8") as f:
+                with open(glove_filepath, encoding="utf-8") as f:
                     lines = f.readlines()
                 glove_tokens = parse_glove_tokens(
                     lines
@@ -370,7 +374,7 @@ class TransformerTokenizer:
     def encode(self, text: str) -> list[int]:
         """Encode text to token IDs."""
 
-        if self.vocab is None:
+        if self.vocab_size == 0:
             raise VocabNotBuiltError()
 
         tokens = self.tokenize(text)
