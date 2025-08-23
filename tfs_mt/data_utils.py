@@ -86,6 +86,18 @@ class TransformerTokenizer:
         }
         self.num_workers = num_workers
 
+        self.glove_available_versions = [
+            "glove.2024.dolma.300d",
+            "glove.2024.wikigiga.300d",
+            "glove.2024.wikigiga.200d",
+            "glove.2024.wikigiga.100d",
+            "glove.2024.wikigiga.50d",
+            "glove.42B.300d",
+            "glove.6B",
+            "glove.840B.300d",
+            "glove.twitter.27B",
+        ]
+
     @property
     def vocab_size(self):
         return len(self.vocab) if self.vocab else 0
@@ -184,19 +196,8 @@ class TransformerTokenizer:
         if extend_with_glove:
             print("Extending vocab with GloVe tokens using parallel processing...")
 
-            glove_available_versions = [
-                "glove.2024.dolma.300d",
-                "glove.2024.wikigiga.300d.zip",
-                "glove.2024.wikigiga.200d.zip",
-                "glove.2024.wikigiga.100d.zip",
-                "glove.2024.wikigiga.50d",
-                "glove.42B.300d",
-                "glove.6B",
-                "glove.840B.300d",
-                "glove.twitter.27B.zip",
-            ]
-            if glove_version not in glove_available_versions:
-                raise GloVeVersionError(glove_version, glove_available_versions)
+            if glove_version not in self.glove_available_versions:
+                raise GloVeVersionError(glove_version, self.glove_available_versions)
 
             data_path = os.getcwd() + "/data" if "data_path" not in kwargs else kwargs["data_path"]
             glove_folder_path = data_path + f"/{glove_version}"
@@ -301,19 +302,8 @@ class TransformerTokenizer:
         if extend_with_glove:
             print("Extending vocab with GloVe tokens...")
 
-            glove_available_versions = [
-                "glove.2024.dolma.300d",
-                "glove.2024.wikigiga.300d",
-                "glove.2024.wikigiga.200d",
-                "glove.2024.wikigiga.100d",
-                "glove.2024.wikigiga.50d",
-                "glove.42B.300d",
-                "glove.6B",
-                "glove.840B.300d",
-                "glove.twitter.27B",
-            ]
-            if glove_version not in glove_available_versions:
-                raise GloVeVersionError(glove_version, glove_available_versions)
+            if glove_version not in self.glove_available_versions:
+                raise GloVeVersionError(glove_version, self.glove_available_versions)
 
             data_path = os.getcwd() + "/data" if "data_path" not in kwargs else kwargs["data_path"]
             glove_folder_path = data_path + f"/{glove_version}"
