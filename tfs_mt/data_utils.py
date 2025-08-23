@@ -65,9 +65,9 @@ class TransformerTokenizer:
         contractions: dict[str, str] | None = None,
         num_workers: int = 4,
     ):
-        self.vocab = []
-        self.token_to_idx = {}
-        self.idx_to_token = {}
+        self.vocab: list[str] = []
+        self.token_to_idx: dict[str, int] = {}
+        self.idx_to_token: dict[int, str] = {}
         self.special_tokens = special_tokens or {
             "sos_token": CONFIG["sos_token"],
             "eos_token": CONFIG["eos_token"],
@@ -225,7 +225,7 @@ class TransformerTokenizer:
                             f.write(chunk)
 
                     with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                        zip_ref.extractall("data")
+                        zip_ref.extractall(glove_folder_path)
 
                     for file in os.listdir(glove_folder_path):
                         if file.endswith(".txt"):
@@ -342,7 +342,7 @@ class TransformerTokenizer:
                             f.write(chunk)
 
                     with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                        zip_ref.extractall("data")
+                        zip_ref.extractall(glove_folder_path)
 
                     for file in os.listdir(glove_folder_path):
                         if file.endswith(".txt"):
