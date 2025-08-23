@@ -57,7 +57,7 @@ def parse_glove_tokens(lines: list[str]) -> list[str]:
 
 
 class TransformerTokenizer:
-    """Transformer tokenizer"""
+    """Transformer tokenizer."""
 
     def __init__(
         self,
@@ -153,16 +153,16 @@ class TransformerTokenizer:
         glove_version: str = "glove.2024.wikigiga.50d",
         **kwargs,
     ) -> None:
-        """_summary_ TODO
+        """Build vocabulary method. Uses multithreading execution to speed up the computation.
 
         Args:
-            tokens (list[str]): _description_
-            min_freq (int, optional): _description_. Defaults to 1.
-            extend_with_glove (bool, optional): _description_. Defaults to False.
-            glove_version (str, optional): _description_. Defaults to "glove.2024.wikigiga.50d".
+            tokens (list[str]): Tokens from dataset to build vocabulary on.
+            min_freq (int, optional): Minimum number of times a token has to appear in the dataset to be included in the vocabulary. Defaults to 1.
+            extend_with_glove (bool, optional): Enable vocabulary extension with GloVe tokens. Defaults to False.
+            glove_version (str, optional): GloVe version to use if `extend_with_glove` is `True`. Defaults to "glove.2024.wikigiga.50d".
 
         Raises:
-            GloVeVersionError: _description_
+            GloVeVersionError: Provided glove_version is unavailable.
         """
         vocab = []
         vocab.extend(self.special_tokens.values())
@@ -272,16 +272,16 @@ class TransformerTokenizer:
         glove_version: str = "glove.2024.wikigiga.50d",
         **kwargs,
     ) -> None:
-        """_summary_ TODO
+        """Build vocabulary method.
 
         Args:
-            tokens (list[str]): _description_
-            min_freq (int, optional): _description_. Defaults to 1.
-            extend_with_glove (bool, optional): _description_. Defaults to False.
-            glove_version (str, optional): _description_. Defaults to "glove.2024.wikigiga.50d".
+            tokens (list[str]): Tokens from dataset to build vocabulary on.
+            min_freq (int, optional): Minimum number of times a token has to appear in the dataset to be included in the vocabulary. Defaults to 1.
+            extend_with_glove (bool, optional): Enable vocabulary extension with GloVe tokens. Defaults to False.
+            glove_version (str, optional): GloVe version to use if `extend_with_glove` is `True`. Defaults to "glove.2024.wikigiga.50d".
 
         Raises:
-            GloVeVersionError: _description_
+            GloVeVersionError: Raise error is the provided glove_version is unavailable.
         """
         vocab = []
         vocab.extend(self.special_tokens.values())
@@ -364,7 +364,17 @@ class TransformerTokenizer:
         print(f"Built vocabulary with {len(vocab)} tokens.")
 
     def encode(self, text: str) -> list[int]:
-        """Encode text to token IDs."""
+        """Encode text to token IDs.
+
+        Args:
+            text (str): Text to be encoded.
+
+        Raises:
+            VocabNotBuiltError: Vocabulary is not built.
+
+        Returns:
+            list[int]: List of token ids.
+        """
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
 
@@ -386,11 +396,24 @@ class TransformerTokenizer:
     def decode(self, token_ids: list[int]) -> list[str]:
         """Decode token IDs.
         Returns the unknown token if the input token is not present in the vocabulary.
+
+        Args:
+            token_ids (list[int]): List of tokens ids to decode into text.
+
+        Raises:
+            VocabNotBuiltError: Vocabulary is not built.
+
+        Returns:
+            list[str]: Decoded text.
         """
+        if self.vocab_size == 0:
+            raise VocabNotBuiltError()
         return [self.idx_to_token.get(idx, CONFIG["unk_token"]) for idx in token_ids]
 
 
 class TranslationDataset(Dataset):
+    """Translation Dataset."""
+
     def __init__(
         self,
         dataset,
