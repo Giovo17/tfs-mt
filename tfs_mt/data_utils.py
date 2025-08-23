@@ -303,14 +303,14 @@ class TransformerTokenizer:
 
             glove_available_versions = [
                 "glove.2024.dolma.300d",
-                "glove.2024.wikigiga.300d.zip",
-                "glove.2024.wikigiga.200d.zip",
-                "glove.2024.wikigiga.100d.zip",
+                "glove.2024.wikigiga.300d",
+                "glove.2024.wikigiga.200d",
+                "glove.2024.wikigiga.100d",
                 "glove.2024.wikigiga.50d",
                 "glove.42B.300d",
                 "glove.6B",
                 "glove.840B.300d",
-                "glove.twitter.27B.zip",
+                "glove.twitter.27B",
             ]
             if glove_version not in glove_available_versions:
                 raise GloVeVersionError(glove_version, glove_available_versions)
@@ -411,6 +411,7 @@ class TranslationDataset(Dataset):
         max_length: int | None = None,
         vocab_min_freq: int = 1,
         extend_vocab_with_glove: bool = False,
+        **kwargs,
     ):
         self.dataset = dataset
         self.src_tokenizer = src_tokenizer
@@ -426,9 +427,16 @@ class TranslationDataset(Dataset):
                 and len(x["translation"][tgt_lang].split()) <= max_length
             )
 
-        self._build_vocabs(vocab_min_freq=vocab_min_freq, extend_with_glove=extend_vocab_with_glove)
+        if "glove_version" in kwargs:
+            self._build_vocabs(
+                vocab_min_freq=vocab_min_freq,
+                extend_with_glove=extend_vocab_with_glove,
+                glove_version=kwargs["glove_version"],
+            )
+        else:
+            self._build_vocabs(vocab_min_freq=vocab_min_freq, extend_with_glove=extend_vocab_with_glove)
 
-    def _build_vocabs(self, vocab_min_freq: int = 1, extend_with_glove: bool = False) -> None:
+    def _build_vocabs(self, vocab_min_freq: int = 1, extend_with_glove: bool = False, **kwargs) -> None:
         """Build vocabularies for tokenizers."""
 
         print("Building vocabs, it may take a few minutes...")
@@ -447,11 +455,13 @@ class TranslationDataset(Dataset):
             extend_with_glove=bool(
                 extend_with_glove and self.src_lang == "en"
             ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
+            glove_version=kwargs.get("glove_version", "glove.2024.wikigiga.50d"),
         )
         self.tgt_tokenizer.build_vocab_parallel(
             tgt_tokens,
             min_freq=vocab_min_freq,
             extend_with_glove=bool(extend_with_glove and self.tgt_lang == "en"),
+            glove_version=kwargs.get("glove_version", "glove.2024.wikigiga.50d"),
         )
 
     def __len__(self):
