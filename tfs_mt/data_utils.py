@@ -152,9 +152,11 @@ class TransformerTokenizer:
         Raises:
             GloVeVersionError: _description_
         """
-
         vocab = []
         vocab.extend(self.special_tokens.values())
+        vocab_set = set(
+            vocab
+        )  # Used for quick O(1) insertion of new tokens, instead of searching in the vocab list for each new token (O(n))
 
         if min_freq > 1:
             # Split tokens in chunks and assign them to CPU thread for parallel counting
@@ -167,12 +169,14 @@ class TransformerTokenizer:
                 token_counts.update(c)
 
             for token, count in token_counts.items():
-                if count >= min_freq and token not in vocab:
-                    vocab.append(token.lower())
+                if count >= min_freq:
+                    vocab_set.add(token.lower())
         else:
             for token in tokens:
-                if token not in vocab:
-                    vocab.append(token.lower())
+                vocab_set.add(token.lower())
+
+        vocab = list(vocab_set)
+        del vocab_set
 
         glove_tokens = []
 
@@ -201,6 +205,8 @@ class TransformerTokenizer:
             url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
             zip_path = data_path + f"/{glove_version}.zip"
 
+            glove_tokens = []
+
             try:
                 glove_filepath = None
                 for file in os.listdir(glove_folder_path):
@@ -210,9 +216,6 @@ class TransformerTokenizer:
 
                 if glove_filepath is None:
                     print(f"GloVe not found in {glove_folder_path}. Downloading...")
-
-                    url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
-                    zip_path = data_path + f"/{glove_version}.zip"
 
                     response = requests.get(url, stream=True, timeout=600)
                     response.raise_for_status()
@@ -279,21 +282,21 @@ class TransformerTokenizer:
         Raises:
             GloVeVersionError: _description_
         """
-
         vocab = []
         vocab.extend(self.special_tokens.values())
+        vocab_set = set(vocab)
 
         if min_freq > 1:
             token_counts = Counter(tokens)
             for token, count in token_counts.items():
-                if count >= min_freq and token not in vocab:
-                    vocab.append(token.lower())
+                if count >= min_freq:
+                    vocab_set.add(token.lower())
         else:
             for token in tokens:
-                if token not in vocab:
-                    vocab.append(token.lower())
+                vocab_set.add(token.lower())
 
-        glove_tokens = []
+        vocab = list(vocab_set)
+        del vocab_set
 
         if extend_with_glove:
             print("Extending vocab with GloVe tokens...")
@@ -316,6 +319,11 @@ class TransformerTokenizer:
             glove_folder_path = data_path + f"/{glove_version}"
             os.makedirs(glove_folder_path, exist_ok=True)
 
+            url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
+            zip_path = data_path + f"/{glove_version}.zip"
+
+            glove_tokens = []
+
             try:
                 glove_filepath = None
                 for file in os.listdir(glove_folder_path):
@@ -325,9 +333,6 @@ class TransformerTokenizer:
 
                 if glove_filepath is None:
                     print(f"GloVe not found in {glove_folder_path}. Downloading GloVe ({glove_version})...")
-
-                    url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
-                    zip_path = data_path + f"/{glove_version}.zip"
 
                     response = requests.get(url, stream=True, timeout=600)
                     response.raise_for_status()
