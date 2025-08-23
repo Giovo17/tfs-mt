@@ -139,6 +139,7 @@ class TransformerTokenizer:
         min_freq: int = 1,
         extend_with_glove: bool = False,
         glove_version: str = "glove.2024.wikigiga.50d",
+        **kwargs,
     ) -> None:
         """_summary_ TODO
 
@@ -169,12 +170,9 @@ class TransformerTokenizer:
                 if count >= min_freq and token not in vocab:
                     vocab.append(token.lower())
         else:
-            seen = set(vocab)
             for token in tokens:
-                low = token.lower()
-                if low not in seen:
-                    vocab.append(low)
-                    seen.add(low)
+                if token not in vocab:
+                    vocab.append(token.lower())
 
         glove_tokens = []
 
@@ -196,7 +194,7 @@ class TransformerTokenizer:
             if glove_version not in glove_available_versions:
                 raise GloVeVersionError(glove_version, glove_available_versions)
 
-            data_path = os.getcwd() + "/data"
+            data_path = os.getcwd() + "/data" if "data_path" not in kwargs else kwargs["data_path"]
             glove_folder_path = data_path + f"/{glove_version}"
             os.makedirs(glove_folder_path, exist_ok=True)
 
@@ -246,9 +244,8 @@ class TransformerTokenizer:
                     glove_tokens.extend(lst)
 
                 initial_size = len(vocab)
-                for token in glove_tokens:
-                    if token not in vocab:
-                        vocab.append(token)
+                vocab.extend(glove_tokens)
+                vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
 
@@ -269,8 +266,9 @@ class TransformerTokenizer:
         min_freq: int = 1,
         extend_with_glove: bool = False,
         glove_version: str = "glove.2024.wikigiga.50d",
+        **kwargs,
     ) -> None:
-        """_summary_
+        """_summary_ TODO
 
         Args:
             tokens (list[str]): _description_
@@ -314,7 +312,7 @@ class TransformerTokenizer:
             if glove_version not in glove_available_versions:
                 raise GloVeVersionError(glove_version, glove_available_versions)
 
-            data_path = os.getcwd() + "/data"
+            data_path = os.getcwd() + "/data" if "data_path" not in kwargs else kwargs["data_path"]
             glove_folder_path = data_path + f"/{glove_version}"
             os.makedirs(glove_folder_path, exist_ok=True)
 
@@ -352,12 +350,11 @@ class TransformerTokenizer:
                     lines = f.readlines()
                 glove_tokens = parse_glove_tokens(
                     lines
-                )  # Using multithreaded-designed parse_glove_tokens function in order to avoid code duplication
+                )  # Using parse_glove_tokens function in order to avoid code duplication
 
                 initial_size = len(vocab)
-                for token in glove_tokens:
-                    if token not in vocab:
-                        vocab.append(token)
+                vocab.extend(glove_tokens)
+                vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
 
@@ -373,7 +370,6 @@ class TransformerTokenizer:
 
     def encode(self, text: str) -> list[int]:
         """Encode text to token IDs."""
-
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
 
@@ -403,13 +399,13 @@ class TranslationDataset(Dataset):
     def __init__(
         self,
         dataset,
-        src_tokenizer,
-        tgt_tokenizer,
-        src_lang,
-        tgt_lang,
-        max_length=None,
-        vocab_min_freq=1,
-        extend_vocab_with_glove=False,
+        src_tokenizer: TransformerTokenizer,
+        tgt_tokenizer: TransformerTokenizer,
+        src_lang: str,
+        tgt_lang: str,
+        max_length: int | None = None,
+        vocab_min_freq: int = 1,
+        extend_vocab_with_glove: bool = False,
     ):
         self.dataset = dataset
         self.src_tokenizer = src_tokenizer
@@ -432,7 +428,7 @@ class TranslationDataset(Dataset):
 
         print("Building vocabs, it may take a few minutes...")
 
-        # Provides lists of tokens
+        # Provides lists of tokens. Here the lists are not converted to sets cause the tokenizer may need the token frequencies
         src_tokens = [
             token for el in self.dataset for token in self.src_tokenizer.tokenize(el["translation"][self.src_lang])
         ]
@@ -456,7 +452,7 @@ class TranslationDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx) -> dict[str, torch.Tensor | str]:
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor | str]:
         example = self.dataset[idx]
         src_text = example["translation"][self.src_lang]
         tgt_text = example["translation"][self.tgt_lang]
