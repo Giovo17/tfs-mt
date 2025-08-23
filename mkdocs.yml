@@ -9,7 +9,9 @@ copyright: Maintained by <a href="https://giovannispadaro.it">Giovanni Spadaro</
 
 nav:
   - Home: index.md
-  - Modules: modules.md
+  - Modules:
+    - Data utils: modules/data_utils.md
+    - Embeddings: modules/embeddings.md
 plugins:
   - search
   - mkdocstrings:
