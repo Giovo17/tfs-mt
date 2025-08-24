@@ -34,7 +34,21 @@ class EmbeddingTypeNotImplementedError(Exception):
         super().__init__(msg)
 
 
+class IncompatibleEmbeddingsDimError(Exception):
+    def __init__(self, token_embeddings_shape):
+        msg = f"Expected (batch size, max token sequence length, model dimension) got {token_embeddings_shape}"
+        super().__init__(msg)
+
+
 class Embedding(nn.Module):
+    """Transformer embeddings layer.
+
+    This implementation uses a randomly initialized embedding lookup table with dimension `[vocab_size, d_model]`.
+
+    There's the possibility of loading pretrained embeddings from GloVe. This choice has been made to achieve acceptable
+    performances with low resources training and limited time training.
+    """
+
     def __init__(
         self,
         vocab_size: int,
@@ -43,7 +57,7 @@ class Embedding(nn.Module):
         pretrained_emb_type: str | None = None,
         pretrained_emb_path: str | None = None,
         **kwargs,
-    ) -> None:
+    ):
         super().__init__()
 
         if d_model is None and not from_pretrained:
@@ -68,7 +82,9 @@ class Embedding(nn.Module):
 
         else:
             embeddings_dim = d_model
-            embeddings_lut = nn.Embedding(vocab_size, d_model)
+            embeddings_lut = nn.Embedding(
+                vocab_size, d_model
+            )  # Randomly initialized lookup table. If so the initialization will be handled in architecture.Transformer class
 
         self.d_model = embeddings_dim
         self.embeddings_lut = embeddings_lut
@@ -95,9 +111,6 @@ class Embedding(nn.Module):
                         continue
                     else:
                         embeddings_lut.weight.data[idx].copy_(token_emb)
-
-        elif emb_type == "torch":
-            pass
         else:
             raise EmbeddingTypeNotImplementedError(emb_type)
 
@@ -107,12 +120,48 @@ class Embedding(nn.Module):
         """Get token embeddings.
 
         Args:
-            token_ids (torch.Tensor): Input batch of token_ids. Dim = [batch_size, sequence_length]
+            token_ids (torch.Tensor): Input batch of token_ids. Expected shape: [`batch_size`, `sequence_length`]
 
         Returns:
-            torch.Tensor: Output batch of token embeddings. Dim = [batch_size, sequence_length, d_model]
+            torch.Tensor: Output batch of token embeddings. Shape: [`batch_size`, `sequence_length`, `d_model`]
         """
 
         embeddings = self.embeddings_lut(token_ids)
 
         return embeddings
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+    """Sinusoidal Positional Encoding implementation from the [original paper](https://arxiv.org/abs/1706.03762).
+
+    $$
+    \\begin{align*}
+    PE_{(pos,2i)} &= \\sin(pos/10000^{2i/d_{model}}) \\\\
+    PE_{(pos,2i+1)} &= \\cos(pos/10000^{2i/d_{model}})
+    \\end{align*}
+    $$
+    """
+
+    def __init__(self, d_model: int, max_sequence_length: int = 512):
+        super().__init__()
+
+        # Vector of all possible positions in the sequence [max_sequence_length, 1]
+        position_id = torch.arange(0, max_sequence_length).unsqueeze(1)
+        i_idx = torch.arange(0, d_model, 2, dtype=torch.float32) / d_model  # 2i / d_model
+        freq_vec = torch.pow(10000.0, -i_idx)  # 1 / (10000^(2i/d_model))
+
+        pe_lut = torch.zeros(max_sequence_length, d_model)  # Init positional encoding lookup table
+        pe_lut[:, 0::2] = torch.sin(position_id * freq_vec)  # Assign sine on even positions
+        pe_lut[:, 1::2] = torch.cos(position_id * freq_vec)  # Assing cosine on odd positions
+
+        # Registering this weights as buffers so that they will be saved in model state_dict,
+        # but they won't appear in model.parameters so that optimizer will not change them
+        self.register_buffer("pe_lut", pe_lut)
+
+    def forward(self, token_embeddings: nn.Embedding) -> nn.Embedding:
+        if token_embeddings.ndim != 3 or token_embeddings.size(-1) != self.pe_lut.size(1):
+            raise IncompatibleEmbeddingsDimError(token_embeddings.shape)
+
+        positional_encodings = self.pe_lut[: token_embeddings.size(1)]
+
+        return token_embeddings + positional_encodings
