@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 
 
-class TokenizerNotProvidedError(Exception):
+class TokenizerNotSuppliedError(Exception):
     def __init__(
         self,
-        msg="Tokenizer not provided. When loading pretrained Glove embeddings the tokenizer has to be provided in order to map GloVe words to vocab entries.",
+        msg="Tokenizer not supplied. When loading pretrained Glove embeddings the tokenizer has to be supplied in order to map GloVe words to vocab entries.",
     ):
         super().__init__(msg)
 
@@ -47,6 +47,19 @@ class Embedding(nn.Module):
 
     There's the possibility of loading pretrained embeddings from GloVe. This choice has been made to achieve acceptable
     performances with low resources training and limited time training.
+
+    Args:
+        vocab_size (int): Number of tokens in vocabulary.
+        d_model (int | None, optional): Model dimension. Defaults to None.
+        from_pretrained (bool, optional): Load embeddings from pretrained. Defaults to False.
+        pretrained_emb_type (str | None, optional): Type of pretrained embeddings. Defaults to None.
+        pretrained_emb_path (str | None, optional): Path of pretrained embeddings. Defaults to None.
+
+    Raises:
+        EmbeddingDimError: Raised when the provided embedding dimension does not match the expected size.
+        EmbeddingTypePathError: Raised when the embedding type or file path is invalid or not found.
+        TokenizerNotSuppliedError: Raised when a tokenizer is required but has not been supplied.
+        VocabNotBuiltError: Raised when an operation requiring a built vocabulary is attempted before the vocabulary is constructed.
     """
 
     def __init__(
@@ -65,11 +78,11 @@ class Embedding(nn.Module):
 
         if from_pretrained:
             if d_model is not None:
-                print(f"Ignoring provided d_model ({d_model}). The embeddings dim will be inferred from pretrained.")
+                print(f"Ignoring d_model ({d_model}). The embeddings dim will be inferred from pretrained.")
             if pretrained_emb_type is None or pretrained_emb_path is None:
                 raise EmbeddingTypePathError(from_pretrained, pretrained_emb_type, pretrained_emb_path)
             if pretrained_emb_type == "GloVe" and "tokenizer" not in kwargs:
-                raise TokenizerNotProvidedError()
+                raise TokenizerNotSuppliedError()
             if kwargs["tokenizer"].vocab_size == 0:
                 raise VocabNotBuiltError()
 
@@ -140,6 +153,10 @@ class SinusoidalPositionalEncoding(nn.Module):
     PE_{(pos,2i+1)} &= \\cos(pos/10000^{2i/d_{model}})
     \\end{align*}
     $$
+
+    Args:
+        d_model (int): Model dimension.
+        max_sequence_length (int, optional): Max sequence length. Defaults to 512.
     """
 
     def __init__(self, d_model: int, max_sequence_length: int = 512):

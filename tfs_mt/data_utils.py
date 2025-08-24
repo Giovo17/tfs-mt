@@ -3,6 +3,7 @@ import zipfile
 from collections import Counter
 from multiprocessing import Pool
 
+import datasets
 import requests
 import torch
 from torch.utils.data import Dataset
@@ -57,7 +58,13 @@ def parse_glove_tokens(lines: list[str]) -> list[str]:
 
 
 class TransformerTokenizer:
-    """Transformer tokenizer."""
+    """Transformer tokenizer.
+
+    Args:
+        special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. BOS_TOKEN, EOS_TOKEN. Defaults to None.
+        contractions (dict[str, str] | None, optional): Contractions to be considered, eg. 's, 'll . Defaults to None.
+        num_workers (int, optional): Number of CPU threads to use in parallel operations, eg. token counting or GloVe token extraction. Defaults to 4.
+    """
 
     def __init__(
         self,
@@ -162,7 +169,7 @@ class TransformerTokenizer:
             glove_version (str, optional): GloVe version to use if `extend_with_glove` is `True`. Defaults to "glove.2024.wikigiga.50d".
 
         Raises:
-            GloVeVersionError: Provided glove_version is unavailable.
+            GloVeVersionError: Raised when supplied glove_version is unavailable.
         """
         vocab = []
         vocab.extend(self.special_tokens.values())
@@ -281,7 +288,7 @@ class TransformerTokenizer:
             glove_version (str, optional): GloVe version to use if `extend_with_glove` is `True`. Defaults to "glove.2024.wikigiga.50d".
 
         Raises:
-            GloVeVersionError: Raise error is the provided glove_version is unavailable.
+            GloVeVersionError: Raised when supplied glove_version is unavailable.
         """
         vocab = []
         vocab.extend(self.special_tokens.values())
@@ -412,11 +419,22 @@ class TransformerTokenizer:
 
 
 class TranslationDataset(Dataset):
-    """Translation Dataset."""
+    """Translation Dataset.
+
+    Args:
+        dataset (datasets.Dataset): The Hugging Face dataset containing text samples to be processed.
+        src_tokenizer (TransformerTokenizer): Tokenizer used to preprocess the source language text.
+        tgt_tokenizer (TransformerTokenizer): Tokenizer used to preprocess the target language text.
+        src_lang (str): Identifier for the source language, e.g., `"en"` for English.
+        tgt_lang (str): Identifier for the target language, e.g., `"it"` for Italian.
+        max_length (int | None, optional): Maximum sequence length for tokenization. If None, sequences are not truncated. Defaults to None.
+        vocab_min_freq (int, optional): Minimum frequency threshold for including a token in the vocabulary. Defaults to 1.
+        extend_vocab_with_glove (bool, optional): Whether to extend the vocabulary with pretrained GloVe embeddings. Defaults to False.
+    """
 
     def __init__(
         self,
-        dataset,
+        dataset: datasets.Dataset,
         src_tokenizer: TransformerTokenizer,
         tgt_tokenizer: TransformerTokenizer,
         src_lang: str,
