@@ -72,10 +72,15 @@ class WordTokenizer:
         special_tokens: dict[str, str] | None = None,
         contractions: dict[str, str] | None = None,
         num_workers: int = 4,
+        tokenizer_max_len: int = 128,
     ):
         self.vocab: list[str] = []
         self.token_to_idx: dict[str, int] = {}
         self.idx_to_token: dict[int, str] = {}
+
+        self.num_workers = num_workers
+        self.tokenizer_max_len = tokenizer_max_len
+
         self.special_tokens = special_tokens or {
             "sos_token": CONFIG["sos_token"],
             "eos_token": CONFIG["eos_token"],
@@ -92,7 +97,6 @@ class WordTokenizer:
             "'d": " 'd",
             "n't": " n't",
         }
-        self.num_workers = num_workers
 
         self.glove_available_versions = [
             "glove.2024.dolma.300d",
@@ -139,7 +143,6 @@ class WordTokenizer:
         Returns:
             List[str]: List of string tokens from text.
         """
-
         text = text.strip().lower()
 
         for contraction, replacement in self.contractions.items():
@@ -147,7 +150,7 @@ class WordTokenizer:
 
         tokens = text.split()
 
-        return [token[:1000] for token in tokens]
+        return [token[:1000] for token in tokens][: self.tokenizer_max_len]
 
     def from_pretrained(self):
         # TODO
@@ -371,7 +374,7 @@ class WordTokenizer:
 
         print(f"Built vocabulary with {len(vocab)} tokens.")
 
-    def encode(self, text: str) -> list[int]:
+    def encode(self, text: str, pad_to_len: int | None = None) -> list[int]:
         """Encode text to token IDs.
 
         Args:
@@ -392,12 +395,24 @@ class WordTokenizer:
         tokens.insert(0, self.special_tokens["sos_token"])
         tokens.append(self.special_tokens["eos_token"])
 
-        token_ids = []
-        for token in tokens:
-            if token in self.token_to_idx:
-                token_ids.append(self.token_to_idx[token])
-            else:
-                token_ids.append(self.token_to_idx[self.special_tokens["unk_token"]])
+        token_ids = [
+            self.token_to_idx[token]
+            if token in self.token_to_idx
+            else self.token_to_idx[self.special_tokens["unk_token"]]
+            for token in tokens
+        ]
+
+        # token_ids = []
+        # for token in tokens:
+        #     if token in self.token_to_idx:
+        #         token_ids.append(self.token_to_idx[token])
+        #     else:
+        #         token_ids.append(self.token_to_idx[self.special_tokens["unk_token"]])
+
+        if pad_to_len is not None:  # Pad sequence to pad_to_len
+            token_ids.extend([
+                self.token_to_idx[self.special_tokens["pad_token"]] for _ in range(pad_to_len - len(tokens))
+            ])
 
         return token_ids
 
