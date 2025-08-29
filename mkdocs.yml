@@ -10,8 +10,10 @@ copyright: Maintained by <a href="https://giovannispadaro.it">Giovanni Spadaro</
 nav:
   - Home: index.md
   - Modules:
-    - Data utils: modules/data_utils.md
+    - Architecture: modules/architecture.md
     - Embeddings: modules/embeddings.md
+    - Data utils: modules/data_utils.md
+
 plugins:
   - search
   - mkdocstrings:
