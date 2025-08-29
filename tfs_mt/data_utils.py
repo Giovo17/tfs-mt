@@ -57,8 +57,9 @@ def parse_glove_tokens(lines: list[str]) -> list[str]:
     return result
 
 
-class TransformerTokenizer:
-    """Transformer tokenizer.
+class WordTokenizer:
+    """Word tokenizer.
+    Mainly used to let the model be compatible with pretrained GloVe embeddings.
 
     Args:
         special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. BOS_TOKEN, EOS_TOKEN. Defaults to None.
@@ -423,8 +424,8 @@ class TranslationDataset(Dataset):
 
     Args:
         dataset (datasets.Dataset): The Hugging Face dataset containing text samples to be processed.
-        src_tokenizer (TransformerTokenizer): Tokenizer used to preprocess the source language text.
-        tgt_tokenizer (TransformerTokenizer): Tokenizer used to preprocess the target language text.
+        src_tokenizer (WordTokenizer): Tokenizer used to preprocess the source language text.
+        tgt_tokenizer (WordTokenizer): Tokenizer used to preprocess the target language text.
         src_lang (str): Identifier for the source language, e.g., `"en"` for English.
         tgt_lang (str): Identifier for the target language, e.g., `"it"` for Italian.
         max_length (int | None, optional): Maximum sequence length for tokenization. If None, sequences are not truncated. Defaults to None.
@@ -435,8 +436,8 @@ class TranslationDataset(Dataset):
     def __init__(
         self,
         dataset: datasets.Dataset,
-        src_tokenizer: TransformerTokenizer,
-        tgt_tokenizer: TransformerTokenizer,
+        src_tokenizer: WordTokenizer,
+        tgt_tokenizer: WordTokenizer,
         src_lang: str,
         tgt_lang: str,
         max_length: int | None = None,
