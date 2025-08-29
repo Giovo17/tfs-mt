@@ -3,10 +3,29 @@ import math
 import torch
 import torch.nn as nn
 
+from .embeddings import Embedding, SinusoidalPositionalEncoding
 
-class DModelNotDivisibleByNumHeads(Exception):
-    def __init__(self, d_model, num_heads):
-        msg = f"d_model is not divisible by the number of heads, got d_model = {d_model} and num_heads = {num_heads}."
+
+class MissingArgumentsError(Exception):
+    def __init__(self, emb_type):
+        msg_init = "Source" if emb_type == "src" else "Target"
+        msg = f"{msg_init} embeddings initialization from pretrained has been requested, but {emb_type}_emb_pretrained_type or {emb_type}_emb_pretrained_path have not been provided."
+        super().__init__(msg)
+
+
+class MissingArgumentsGloVeError(Exception):
+    def __init__(self, emb_type):
+        msg_init = "Source" if emb_type == "src" else "Target"
+        msg = f"{msg_init} embeddings initialization from GloVe pretrained has been requested, but {emb_type}_tokenizer has not been provided."
+        super().__init__(msg)
+
+
+class LanguageDirectionInvalidFormat(Exception):
+    def __init__(self, language_direction):
+        msg = (
+            f"Invalid language direction format: '{language_direction}'. "
+            "Expected format is '<src_lang>-<tgt_lang>', e.g., 'en-it'."
+        )
         super().__init__(msg)
 
 
@@ -23,10 +42,6 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, d_model: int, num_heads: int, dropout_prob: float = 0.1):
         super().__init__()
-
-        # TODO Remove
-        # if d_model % num_heads != 0:
-        #     raise DModelNotDivisibleByNumHeads(d_model, num_heads)
 
         self.d_model = d_model
         self.num_heads = num_heads
@@ -110,11 +125,11 @@ class MultiHeadAttention(nn.Module):
 
         QKt = torch.matmul(query, key.transpose(-2, -1)) / self.scaling_factor
 
-        print(QKt)
+        print(QKt)  # debug
         if attention_mask is not None:
-            print("Applying mask")
+            print("Applying mask")  # debug
             QKt.masked_fill_(attention_mask == False, float("-inf"))
-        print(QKt)
+        print(QKt)  # debug
 
         QKt_norm = torch.softmax(QKt, dim=-1)
 
@@ -183,3 +198,210 @@ class EncoderBlock(nn.Module):
         h = t5 + t3
 
         return h
+
+
+class DecoderBlock(nn.Module):
+    """Transformer Decoder block.
+
+    Using prenorm approach as in EncoderBlock.
+
+    Args:
+        d_model (int): _description_
+        num_heads (int): _description_
+        d_ff (int): _description_
+        dropout_prob (float, optional): _description_. Defaults to 0.1.
+    """
+
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
+        super().__init__()
+
+        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
+        self.cross_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
+        self.feedforward = FeedForward(d_model, d_ff, dropout_prob)
+        self.layer_norm1 = LayerNorm(d_model)
+        self.layer_norm2 = LayerNorm(d_model)
+        self.layer_norm3 = LayerNorm(d_model)
+
+    def forward(self, x: torch.Tensor, encoder_output: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
+        t1 = self.layer_norm1(x)
+        t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=attention_mask)
+        t3 = t2 + x
+        t4 = self.layer_norm2(t3)
+        # TODO check mask
+        t5 = self.cross_attention(
+            x_query=t4, x_key=encoder_output, x_value=encoder_output, attention_mask=attention_mask
+        )
+        t6 = t5 + t3
+        t7 = self.layer_norm3(t6)
+        t8 = self.feedforward(t7)
+        h = t8 + t6
+
+        return h
+
+
+class Transformer(nn.Module):
+    """Transformer model.
+
+    Using Language Model head to map decoder output representation to tokens in vocabulary.
+
+    Args:
+
+    """
+
+    def __init__(
+        self,
+        src_vocab_size: int,
+        tgt_vocab_size: int,
+        num_encoder_blocks: int = 6,
+        num_decoder_blocks: int = 6,
+        d_model: int = 512,
+        num_heads: int = 8,
+        d_ff: int = 2048,
+        dropout_prob: float = 0.1,
+        **kwargs,
+    ):
+        super().__init__()
+
+        # Source embedding init
+        if kwargs.get("src_emb_from_pretrained"):
+            if "src_emb_pretrained_type" not in kwargs or "src_emb_pretrained_path" not in kwargs:
+                raise MissingArgumentsError("src")
+            if "src_tokenizer" not in kwargs and kwargs["src_emb_pretrained_type"] == "GloVe":
+                raise MissingArgumentsGloVeError("src")
+            self.src_embeddings = Embedding(
+                src_vocab_size,
+                d_model,
+                from_pretrained=True,
+                pretrained_emb_type=kwargs["src_emb_pretrained_type"],
+                pretrained_emb_path=kwargs["src_emb_pretrained_path"],
+                tokenizer=kwargs["src_tokenizer"],
+            )
+        else:
+            self.src_embeddings = Embedding(src_vocab_size, d_model)
+
+        # Target embedding init
+        if kwargs.get("tgt_emb_from_pretrained"):
+            if "tgt_emb_pretrained_type" not in kwargs or "tgt_emb_pretrained_path" not in kwargs:
+                raise MissingArgumentsError("tgt")
+            if "tgt_tokenizer" not in kwargs and kwargs["tgt_emb_pretrained_type"] == "GloVe":
+                raise MissingArgumentsGloVeError("tgt")
+            self.tgt_embeddings = Embedding(
+                tgt_vocab_size,
+                d_model,
+                from_pretrained=True,
+                pretrained_emb_type=kwargs["tgt_emb_pretrained_type"],
+                pretrained_emb_path=kwargs["tgt_emb_pretrained_path"],
+                tokenizer=kwargs["tgt_tokenizer"],
+            )
+        else:
+            self.tgt_embeddings = Embedding(tgt_vocab_size, d_model)
+
+        self.src_pos_embeddings = SinusoidalPositionalEncoding(d_model)
+        self.tgt_pos_embeddings = SinusoidalPositionalEncoding(d_model)
+
+        self.encoder = nn.ModuleList([
+            EncoderBlock(d_model, num_heads, d_ff, dropout_prob) for _ in range(num_encoder_blocks)
+        ])
+        self.decoder = nn.ModuleList([
+            DecoderBlock(d_model, num_heads, d_ff, dropout_prob) for _ in range(num_decoder_blocks)
+        ])
+
+        self.unembedding_matrix = nn.Linear(d_model, tgt_vocab_size, bias=False)
+
+    def init_params(self, skip_embeddings: str | None = None):
+        """Xavier initialize uninitialized layers.
+
+        This weight initialization strategy was first introduced [here](https://proceedings.mlr.press/v9/glorot10a.html). It's used to stabilize gradients during training.
+
+        Args:
+            skip_embeddings (str | None, optional): _description_. Defaults to None.
+        """
+
+        for name, p in self.named_parameters():
+            if skip_embeddings is not None and f"{skip_embeddings}_embeddings" in name:
+                continue
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p, gain=nn.init.calculate_gain("relu"))
+
+    def forward(
+        self, src_sequence: torch.Tensor, tgt_sequence: torch.Tensor, src_mask: torch.Tensor, tgt_mask: torch.Tensor
+    ) -> torch.Tensor:
+        src_x = self.src_embeddings(src_sequence)
+        tgt_x = self.tgt_embeddings(tgt_sequence)
+        src_x = self.src_pos_embeddings(src_x)
+        tgt_x = self.tgt_pos_embeddings(tgt_x)
+
+        encoder_representation = src_x
+        for i in range(len(self.encoder)):
+            encoder_representation = self.encoder[i](encoder_representation, src_mask)
+
+        decoder_output = tgt_x
+        for i in range(len(self.decoder)):
+            decoder_output = self.decoder[i](decoder_output, encoder_representation, tgt_mask)
+
+
+def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_direction="en-it") -> Transformer:
+    import os
+    import re
+
+    from .configs.load_config import load_config
+
+    CONFIG = load_config()
+
+    if not re.match(r"^[a-z]{2}-[a-z]{2}$"):  # Ensure languange direction is in the default like format
+        raise LanguageDirectionInvalidFormat(language_direction)
+
+    if "en" not in language_direction:  # GloVe embeddings available only for English language
+        model = Transformer(
+            src_tokenizer.vocab_size,
+            tgt_tokenizer.vocab_size,
+            num_encoder_blocks=CONFIG["model_configs"]["nano"]["num_encoder_layers"],
+            num_decoder_blocks=CONFIG["model_configs"]["nano"]["num_decoder_layers"],
+            d_model=CONFIG["model_configs"]["nano"]["d_model"],
+            num_heads=CONFIG["model_configs"]["nano"]["num_heads"],
+            d_ff=CONFIG["model_configs"]["nano"]["d_ff"],
+            dropout_prob=CONFIG["model_parameters"]["dropout"],
+        )
+        model.init_params()
+
+    else:
+        glove_version = CONFIG["model_configs"]["nano"]["glove_version"]
+        glove_filename = CONFIG["model_configs"]["nano"]["glove_filename"]
+
+        glove_path = os.path.join(os.getcwd(), f"data/{glove_version}/{glove_filename}.txt")
+
+        if "en-" in language_direction:  # English is the source language
+            model = Transformer(
+                src_tokenizer.vocab_size,
+                tgt_tokenizer.vocab_size,
+                num_encoder_blocks=CONFIG["model_configs"]["nano"]["num_encoder_layers"],
+                num_decoder_blocks=CONFIG["model_configs"]["nano"]["num_decoder_layers"],
+                d_model=CONFIG["model_configs"]["nano"]["d_model"],
+                num_heads=CONFIG["model_configs"]["nano"]["num_heads"],
+                d_ff=CONFIG["model_configs"]["nano"]["d_ff"],
+                dropout_prob=CONFIG["model_parameters"]["dropout"],
+                src_emb_from_pretrained=True,
+                src_emb_pretrained_type=CONFIG["model_configs"]["pretrained_word_embeddings"],
+                src_emb_pretrained_path=glove_path,
+                src_tokenizer=src_tokenizer,
+            )
+            model.init_params(skip_embeddings="src")
+
+        else:  # English is the target language
+            model = Transformer(
+                src_tokenizer.vocab_size,
+                tgt_tokenizer.vocab_size,
+                num_encoder_blocks=CONFIG["model_configs"]["nano"]["num_encoder_layers"],
+                num_decoder_blocks=CONFIG["model_configs"]["nano"]["num_decoder_layers"],
+                d_model=CONFIG["model_configs"]["nano"]["d_model"],
+                num_heads=CONFIG["model_configs"]["nano"]["num_heads"],
+                d_ff=CONFIG["model_configs"]["nano"]["d_ff"],
+                dropout_prob=CONFIG["model_parameters"]["dropout"],
+                tgt_emb_from_pretrained=True,
+                tgt_emb_pretrained_type=CONFIG["model_configs"]["pretrained_word_embeddings"],
+                tgt_emb_pretrained_path=glove_path,
+                tgt_tokenizer=tgt_tokenizer,
+            )
+            model.init_params(skip_embeddings="tgt")
+
+    return model
