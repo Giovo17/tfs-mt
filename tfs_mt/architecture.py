@@ -113,7 +113,7 @@ class MultiHeadAttention(nn.Module):
         print(QKt)
         if attention_mask is not None:
             print("Applying mask")
-            QKt.masked_fill_(not attention_mask, float("-inf"))
+            QKt.masked_fill_(attention_mask == False, float("-inf"))
         print(QKt)
 
         QKt_norm = torch.softmax(QKt, dim=-1)
