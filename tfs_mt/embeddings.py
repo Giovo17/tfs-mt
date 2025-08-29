@@ -95,9 +95,8 @@ class Embedding(nn.Module):
 
         else:
             embeddings_dim = d_model
-            embeddings_lut = nn.Embedding(
-                vocab_size, d_model
-            )  # Randomly initialized lookup table. If so the initialization will be handled in architecture.Transformer class
+            # Randomly initialized lookup table. If so the initialization will be handled in architecture.Transformer class
+            embeddings_lut = nn.Embedding(vocab_size, d_model)
 
         self.d_model = embeddings_dim
         self.embeddings_lut = embeddings_lut
@@ -115,7 +114,8 @@ class Embedding(nn.Module):
             with open(embeddings_path, encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split()
-                    idx = tokenizer.encode(parts[0])[1]  # The first token coming out of tokenizer.encode is SOS_TOKEN
+                    idx, _ = tokenizer.encode(parts[0])
+                    idx = idx[1]  # The first token coming out of tokenizer.encode is SOS_TOKEN
                     if len(parts[1:]) != embeddings_dim:  # Skip unhandled tokens with spaces, eg. "1 3/4"
                         continue
                     try:
@@ -156,10 +156,10 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     Args:
         d_model (int): Model dimension.
-        max_sequence_length (int, optional): Max sequence length. Defaults to 512.
+        max_sequence_length (int, optional): Max sequence length. Defaults to 128.
     """
 
-    def __init__(self, d_model: int, max_sequence_length: int = 512):
+    def __init__(self, d_model: int, dropout_prob: float = 0.1, max_sequence_length: int = 128):
         super().__init__()
 
         # Vector of all possible positions in the sequence [max_sequence_length, 1]
@@ -175,10 +175,15 @@ class SinusoidalPositionalEncoding(nn.Module):
         # but they won't appear in model.parameters so that optimizer will not change them
         self.register_buffer("pe_lut", pe_lut)
 
+        self.dropout = nn.Dropout(dropout_prob)
+
     def forward(self, token_embeddings: nn.Embedding) -> nn.Embedding:
         if token_embeddings.ndim != 3 or token_embeddings.size(-1) != self.pe_lut.size(1):
             raise IncompatibleEmbeddingsDimError(token_embeddings.shape)
 
         positional_encodings = self.pe_lut[: token_embeddings.size(1)]
 
-        return token_embeddings + positional_encodings
+        # we apply dropout to the sums of the embeddings and the positional encodings in both the encoder and decoder stacks (Attention is all you need page 8)
+        final_embedding = self.dropout(token_embeddings + positional_encodings)
+
+        return final_embedding

@@ -37,16 +37,14 @@ class MultiHeadAttention(nn.Module):
     Args:
         d_model (int): Model dimension.
         num_heads (int): Number of attention heads.
-        dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
     """
 
-    def __init__(self, d_model: int, num_heads: int, dropout_prob: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int):
         super().__init__()
 
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_head = int(d_model / num_heads)  # Query, key and value embeddings dimension. d_k = d_v = d_head
-        self.dropout_prob = dropout_prob  # TODO Use it
 
         # Learnable projection matrices. Bias term is omitted since they are used as projections matrices.
         # Every head should have its projection matrix, but rather considering a set of QKV matrices for each head,
@@ -81,7 +79,6 @@ class MultiHeadAttention(nn.Module):
         Returns:
             torch.Tensor: Processed output tensor.
         """
-
         batch_size = x_query.shape[0]
 
         # W_Q(x)          [B, S, D]
@@ -122,7 +119,6 @@ class MultiHeadAttention(nn.Module):
         Returns:
             torch.Tensor: Attention matrix.
         """
-
         QKt = torch.matmul(query, key.transpose(-2, -1)) / self.scaling_factor
 
         print(QKt)  # debug
@@ -184,17 +180,22 @@ class EncoderBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
         super().__init__()
 
-        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
+        self.self_attention = MultiHeadAttention(d_model, num_heads)
         self.feedforward = FeedForward(d_model, d_ff, dropout_prob)
         self.layer_norm1 = LayerNorm(d_model)
         self.layer_norm2 = LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout_prob)
 
     def forward(self, x: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
         t1 = self.layer_norm1(x)
         t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=attention_mask)
+        # We apply dropout [33] to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attentio is all you need page 8)
+        t2 = self.dropout(t2)
         t3 = t2 + x
+
         t4 = self.layer_norm2(t3)
         t5 = self.feedforward(t4)
+        t5 = self.dropout(t5)
         h = t5 + t3
 
         return h
@@ -215,25 +216,31 @@ class DecoderBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
         super().__init__()
 
-        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
-        self.cross_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
+        self.self_attention = MultiHeadAttention(d_model, num_heads)
+        self.cross_attention = MultiHeadAttention(d_model, num_heads)
         self.feedforward = FeedForward(d_model, d_ff, dropout_prob)
         self.layer_norm1 = LayerNorm(d_model)
         self.layer_norm2 = LayerNorm(d_model)
         self.layer_norm3 = LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout_prob)
 
     def forward(self, x: torch.Tensor, encoder_output: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
         t1 = self.layer_norm1(x)
         t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=attention_mask)
+        # We apply dropout [33] to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attentio is all you need page 8)
+        t2 = self.dropout(t2)
         t3 = t2 + x
+
         t4 = self.layer_norm2(t3)
-        # TODO check mask
         t5 = self.cross_attention(
             x_query=t4, x_key=encoder_output, x_value=encoder_output, attention_mask=attention_mask
         )
+        t5 = self.dropout(t5)
         t6 = t5 + t3
+
         t7 = self.layer_norm3(t6)
         t8 = self.feedforward(t7)
+        t8 = self.dropout(t8)
         h = t8 + t6
 
         return h
@@ -296,8 +303,8 @@ class Transformer(nn.Module):
         else:
             self.tgt_embeddings = Embedding(tgt_vocab_size, d_model)
 
-        self.src_pos_embeddings = SinusoidalPositionalEncoding(d_model)
-        self.tgt_pos_embeddings = SinusoidalPositionalEncoding(d_model)
+        self.src_pos_embeddings = SinusoidalPositionalEncoding(d_model, dropout_prob)
+        self.tgt_pos_embeddings = SinusoidalPositionalEncoding(d_model, dropout_prob)
 
         self.encoder = nn.ModuleList([
             EncoderBlock(d_model, num_heads, d_ff, dropout_prob) for _ in range(num_encoder_blocks)
@@ -314,9 +321,8 @@ class Transformer(nn.Module):
         This weight initialization strategy was first introduced [here](https://proceedings.mlr.press/v9/glorot10a.html). It's used to stabilize gradients during training.
 
         Args:
-            skip_embeddings (str | None, optional): _description_. Defaults to None.
+            skip_embeddings (str | None, optional): Which type of embedding should skip Xavier initialization. Useful when initializing embeddings with GloVe. Defaults to None.
         """
-
         for name, p in self.named_parameters():
             if skip_embeddings is not None and f"{skip_embeddings}_embeddings" in name:
                 continue

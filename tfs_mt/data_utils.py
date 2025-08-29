@@ -159,7 +159,7 @@ class WordTokenizer:
     def build_vocab_parallel(
         self,
         tokens: list[str],
-        min_freq: int = 1,
+        min_freq: int = 2,
         extend_with_glove: bool = False,
         glove_version: str = "glove.2024.wikigiga.50d",
         **kwargs,
@@ -168,7 +168,7 @@ class WordTokenizer:
 
         Args:
             tokens (list[str]): Tokens from dataset to build vocabulary on.
-            min_freq (int, optional): Minimum number of times a token has to appear in the dataset to be included in the vocabulary. Defaults to 1.
+            min_freq (int, optional): Minimum number of times a token has to appear in the dataset to be included in the vocabulary. Defaults to 2.
             extend_with_glove (bool, optional): Enable vocabulary extension with GloVe tokens. Defaults to False.
             glove_version (str, optional): GloVe version to use if `extend_with_glove` is `True`. Defaults to "glove.2024.wikigiga.50d".
 
@@ -278,7 +278,7 @@ class WordTokenizer:
     def build_vocab(
         self,
         tokens: list[str],
-        min_freq: int = 1,
+        min_freq: int = 2,
         extend_with_glove: bool = False,
         glove_version: str = "glove.2024.wikigiga.50d",
         **kwargs,
@@ -287,7 +287,7 @@ class WordTokenizer:
 
         Args:
             tokens (list[str]): Tokens from dataset to build vocabulary on.
-            min_freq (int, optional): Minimum number of times a token has to appear in the dataset to be included in the vocabulary. Defaults to 1.
+            min_freq (int, optional): Minimum number of times a token has to appear in the dataset to be included in the vocabulary. Defaults to 2.
             extend_with_glove (bool, optional): Enable vocabulary extension with GloVe tokens. Defaults to False.
             glove_version (str, optional): GloVe version to use if `extend_with_glove` is `True`. Defaults to "glove.2024.wikigiga.50d".
 
@@ -374,7 +374,7 @@ class WordTokenizer:
 
         print(f"Built vocabulary with {len(vocab)} tokens.")
 
-    def encode(self, text: str, pad_to_len: int | None = None) -> list[int]:
+    def encode(self, input_sequence: str | list[str], pad_to_len: int | None = None) -> tuple[list[int], list[bool]]:
         """Encode text to token IDs.
 
         Args:
@@ -389,9 +389,10 @@ class WordTokenizer:
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
 
-        tokens = self.tokenize(text)
+        # Useful when building a TranslationDataset in order to execute tokenize method only once
+        tokens = self.tokenize(input_sequence) if isinstance(input_sequence, str) else input_sequence
 
-        # Add SOS and EOS tokens for target sequences
+        # Add SOS and EOS tokens to given sequence
         tokens.insert(0, self.special_tokens["sos_token"])
         tokens.append(self.special_tokens["eos_token"])
 
@@ -402,19 +403,15 @@ class WordTokenizer:
             for token in tokens
         ]
 
-        # token_ids = []
-        # for token in tokens:
-        #     if token in self.token_to_idx:
-        #         token_ids.append(self.token_to_idx[token])
-        #     else:
-        #         token_ids.append(self.token_to_idx[self.special_tokens["unk_token"]])
-
         if pad_to_len is not None:  # Pad sequence to pad_to_len
             token_ids.extend([
                 self.token_to_idx[self.special_tokens["pad_token"]] for _ in range(pad_to_len - len(tokens))
             ])
 
-        return token_ids
+        # Disabling attention to pad tokens
+        mask = [token != self.token_to_idx[self.special_tokens["pad_token"]] for token in token_ids]
+
+        return token_ids, mask
 
     def decode(self, token_ids: list[int]) -> list[str]:
         """Decode token IDs.
@@ -444,7 +441,7 @@ class TranslationDataset(Dataset):
         src_lang (str): Identifier for the source language, e.g., `"en"` for English.
         tgt_lang (str): Identifier for the target language, e.g., `"it"` for Italian.
         max_length (int | None, optional): Maximum sequence length for tokenization. If None, sequences are not truncated. Defaults to None.
-        vocab_min_freq (int, optional): Minimum frequency threshold for including a token in the vocabulary. Defaults to 1.
+        vocab_min_freq (int, optional): Minimum frequency threshold for including a token in the vocabulary. Defaults to 2.
         extend_vocab_with_glove (bool, optional): Whether to extend the vocabulary with pretrained GloVe embeddings. Defaults to False.
     """
 
@@ -456,7 +453,7 @@ class TranslationDataset(Dataset):
         src_lang: str,
         tgt_lang: str,
         max_length: int | None = None,
-        vocab_min_freq: int = 1,
+        vocab_min_freq: int = 2,
         extend_vocab_with_glove: bool = False,
         **kwargs,
     ):
@@ -483,7 +480,7 @@ class TranslationDataset(Dataset):
         else:
             self._build_vocabs(vocab_min_freq=vocab_min_freq, extend_with_glove=extend_vocab_with_glove)
 
-    def _build_vocabs(self, vocab_min_freq: int = 1, extend_with_glove: bool = False, **kwargs) -> None:
+    def _build_vocabs(self, vocab_min_freq: int = 2, extend_with_glove: bool = False, **kwargs) -> None:
         """Build vocabularies for tokenizers."""
 
         print("Building vocabs, it may take a few minutes...")
@@ -519,13 +516,20 @@ class TranslationDataset(Dataset):
         src_text = example["translation"][self.src_lang]
         tgt_text = example["translation"][self.tgt_lang]
 
+        # src and tgt sequence lengths must be the same to properly compute cross attention
+        # The smaller sequence will be padded to the length of the longer sequence
+        # Attention mask ensure no attention is computed with pad tokens
+        max_seq_len = max(len(src_text), len(tgt_text))
+
         # Tokenize texts
-        src_tokens = self.src_tokenizer.encode(src_text)
-        tgt_tokens = self.tgt_tokenizer.encode(tgt_text)
+        src_tokens, src_mask = self.src_tokenizer.encode(src_text, pad_to_len=max_seq_len)
+        tgt_tokens, src_mask = self.tgt_tokenizer.encode(tgt_text, pad_to_len=max_seq_len)
 
         return {
             "src": torch.tensor(src_tokens, dtype=torch.long),
             "tgt": torch.tensor(tgt_tokens, dtype=torch.long),
+            "src_mask": torch.tensor(src_mask, dtype=torch.bool),
+            "tgt_mask": torch.tensor(src_mask, dtype=torch.bool),
             "src_text": src_text,
             "tgt_text": tgt_text,
         }
