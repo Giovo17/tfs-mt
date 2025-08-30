@@ -20,12 +20,8 @@ class MissingArgumentsGloVeError(Exception):
         super().__init__(msg)
 
 
-class LanguageDirectionInvalidFormat(Exception):
-    def __init__(self, language_direction):
-        msg = (
-            f"Invalid language direction format: '{language_direction}'. "
-            "Expected format is '<src_lang>-<tgt_lang>', e.g., 'en-it'."
-        )
+class ModelSizeNotChoosen(Exception):
+    def __init__(self, msg="Model size not choosen. Add chosen_model_size to config."):
         super().__init__(msg)
 
 
@@ -378,7 +374,7 @@ class Transformer(nn.Module):
             decoder_output = self.decoder[i](decoder_output, encoder_representation, tgt_mask)
 
 
-def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_direction: str = "en-it") -> Transformer:
+def build_model(config, src_tokenizer, tgt_tokenizer) -> Transformer:
     """Build Transformer model.
 
     Args:
@@ -395,48 +391,42 @@ def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_directio
     """
 
     import os
-    import re
 
-    from .configs.load_config import load_config
+    if "chosen_model_size" not in config:
+        raise ModelSizeNotChoosen()
 
-    CONFIG = load_config()
-
-    if not re.match(
-        r"^[a-z]{2}-[a-z]{2}$", language_direction
-    ):  # Ensure languange direction is in the default like format
-        raise LanguageDirectionInvalidFormat(language_direction)
-
-    if "en" not in language_direction:  # GloVe embeddings available only for English language
+    # GloVe embeddings available only for English language
+    if config.dataset.src_lang != "en" and config.dataset.tgt_lang != "en":
         model = Transformer(
             src_tokenizer.vocab_size,
             tgt_tokenizer.vocab_size,
-            num_encoder_blocks=CONFIG["model_configs"][model_size]["num_encoder_layers"],
-            num_decoder_blocks=CONFIG["model_configs"][model_size]["num_decoder_layers"],
-            d_model=CONFIG["model_configs"][model_size]["d_model"],
-            num_heads=CONFIG["model_configs"][model_size]["num_heads"],
-            d_ff=CONFIG["model_configs"][model_size]["d_ff"],
-            dropout_prob=CONFIG["model_parameters"]["dropout"],
+            num_encoder_blocks=config.model_configs[config.chosen_model_size].num_encoder_layers,
+            num_decoder_blocks=config.model_configs[config.chosen_model_size].num_decoder_layers,
+            d_model=config.model_configs[config.chosen_model_size].d_model,
+            num_heads=config.model_configs[config.chosen_model_size].num_heads,
+            d_ff=config.model_configs[config.chosen_model_size].d_ff,
+            dropout_prob=config.model_parameters.dropout,
         )
         model.init_params()
 
     else:
-        glove_version = CONFIG["model_configs"][model_size]["glove_version"]
-        glove_filename = CONFIG["model_configs"][model_size]["glove_filename"]
+        glove_version = config.model_configs[config.chosen_model_size].glove_version
+        glove_filename = config.model_configs[config.chosen_model_size].glove_filename
 
-        glove_path = os.path.join(os.getcwd(), f"data/{glove_version}/{glove_filename}.txt")
+        glove_path = os.path.join(config.base_path, f"data/{glove_version}/{glove_filename}.txt")
 
-        if "en-" in language_direction:  # English is the source language
+        if config.dataset.src_lang == "en":  # English is the source language
             model = Transformer(
                 src_tokenizer.vocab_size,
                 tgt_tokenizer.vocab_size,
-                num_encoder_blocks=CONFIG["model_configs"][model_size]["num_encoder_layers"],
-                num_decoder_blocks=CONFIG["model_configs"][model_size]["num_decoder_layers"],
-                d_model=CONFIG["model_configs"][model_size]["d_model"],
-                num_heads=CONFIG["model_configs"][model_size]["num_heads"],
-                d_ff=CONFIG["model_configs"][model_size]["d_ff"],
-                dropout_prob=CONFIG["model_parameters"]["dropout"],
+                num_encoder_blocks=config.model_configs[config.chosen_model_size].num_encoder_layers,
+                num_decoder_blocks=config.model_configs[config.chosen_model_size].num_decoder_layers,
+                d_model=config.model_configs[config.chosen_model_size].d_model,
+                num_heads=config.model_configs[config.chosen_model_size].num_heads,
+                d_ff=config.model_configs[config.chosen_model_size].d_ff,
+                dropout_prob=config.model_parameters.dropout,
                 src_emb_from_pretrained=True,
-                src_emb_pretrained_type=CONFIG["model_configs"]["pretrained_word_embeddings"],
+                src_emb_pretrained_type=config.model_configs.pretrained_word_embeddings,
                 src_emb_pretrained_path=glove_path,
                 src_tokenizer=src_tokenizer,
             )
@@ -446,14 +436,14 @@ def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_directio
             model = Transformer(
                 src_tokenizer.vocab_size,
                 tgt_tokenizer.vocab_size,
-                num_encoder_blocks=CONFIG["model_configs"][model_size]["num_encoder_layers"],
-                num_decoder_blocks=CONFIG["model_configs"][model_size]["num_decoder_layers"],
-                d_model=CONFIG["model_configs"][model_size]["d_model"],
-                num_heads=CONFIG["model_configs"][model_size]["num_heads"],
-                d_ff=CONFIG["model_configs"][model_size]["d_ff"],
-                dropout_prob=CONFIG["model_parameters"]["dropout"],
+                num_encoder_blocks=config.model_configs[config.chosen_model_size].num_encoder_layers,
+                num_decoder_blocks=config.model_configs[config.chosen_model_size].num_decoder_layers,
+                d_model=config.model_configs[config.chosen_model_size].d_model,
+                num_heads=config.model_configs[config.chosen_model_size].num_heads,
+                d_ff=config.model_configs[config.chosen_model_size].d_ff,
+                dropout_prob=config.model_parameters.dropout,
                 tgt_emb_from_pretrained=True,
-                tgt_emb_pretrained_type=CONFIG["model_configs"]["pretrained_word_embeddings"],
+                tgt_emb_pretrained_type=config.model_configs.pretrained_word_embeddings,
                 tgt_emb_pretrained_path=glove_path,
                 tgt_tokenizer=tgt_tokenizer,
             )

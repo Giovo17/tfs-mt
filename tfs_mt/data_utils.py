@@ -3,14 +3,13 @@ import zipfile
 from collections import Counter
 from multiprocessing import Pool
 
-import datasets
+import ignite.distributed as idist
 import requests
 import torch
-from torch.utils.data import Dataset
-
-from .configs.load_config import load_config
-
-CONFIG = load_config()
+from datasets import load_dataset
+from omegaconf.dictconfig import DictConfig
+from omegaconf.listconfig import ListConfig
+from torch.utils.data import DataLoader, Dataset
 
 
 class VocabNotBuiltError(Exception):
@@ -69,7 +68,7 @@ class WordTokenizer:
 
     def __init__(
         self,
-        special_tokens: dict[str, str] | None = None,
+        special_tokens: dict[str, str],
         contractions: dict[str, str] | None = None,
         num_workers: int = 4,
         tokenizer_max_len: int = 128,
@@ -81,12 +80,8 @@ class WordTokenizer:
         self.num_workers = num_workers
         self.tokenizer_max_len = tokenizer_max_len
 
-        self.special_tokens = special_tokens or {
-            "sos_token": CONFIG["sos_token"],
-            "eos_token": CONFIG["eos_token"],
-            "pad_token": CONFIG["pad_token"],
-            "unk_token": CONFIG["unk_token"],
-        }
+        self.special_tokens = special_tokens
+
         self.contractions = contractions or {
             "'s": " 's",
             "'t": " 't",
@@ -429,7 +424,7 @@ class WordTokenizer:
         """
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
-        return [self.idx_to_token.get(idx, CONFIG["unk_token"]) for idx in token_ids]
+        return [self.idx_to_token.get(idx, self.special_tokens["unk_token"]) for idx in token_ids]
 
 
 class TranslationDataset(Dataset):
@@ -442,44 +437,49 @@ class TranslationDataset(Dataset):
         src_lang (str): Identifier for the source language, e.g., `"en"` for English.
         tgt_lang (str): Identifier for the target language, e.g., `"it"` for Italian.
         max_length (int | None, optional): Maximum sequence length for tokenization. If None, sequences are not truncated. Defaults to None.
-        vocab_min_freq (int, optional): Minimum frequency threshold for including a token in the vocabulary. Defaults to 2.
-        extend_vocab_with_glove (bool, optional): Whether to extend the vocabulary with pretrained GloVe embeddings. Defaults to False.
     """
 
     def __init__(
         self,
-        dataset: datasets.Dataset,
+        src_texts: list[str],
+        tgt_texts: list[str],
         src_tokenizer: WordTokenizer,
         tgt_tokenizer: WordTokenizer,
         src_lang: str,
         tgt_lang: str,
-        max_length: int | None = None,
-        vocab_min_freq: int = 2,
-        extend_vocab_with_glove: bool = False,
+        max_sequence_length: int | None = None,
         **kwargs,
     ):
-        self.dataset = dataset
         self.src_tokenizer = src_tokenizer
         self.tgt_tokenizer = tgt_tokenizer
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
-        self.max_length = max_length
+        self.max_sequence_length = max_sequence_length
 
-        # Downsample the dataset. Mainly for computational contraints and to make tests
-        if self.max_length is not None:
-            self.dataset = self.dataset.filter(
-                lambda x: len(x["translation"][src_lang].split()) <= max_length
-                and len(x["translation"][tgt_lang].split()) <= max_length
-            )
-
-        if "glove_version" in kwargs:
-            self._build_vocabs(
-                vocab_min_freq=vocab_min_freq,
-                extend_with_glove=extend_vocab_with_glove,
-                glove_version=kwargs["glove_version"],
-            )
+        # Filter input data excluding texts longer than max_sequence_length
+        if max_sequence_length != -1:
+            print(f"Max sequence length set to {max_sequence_length}.")
+            self.src_texts, self.tgt_texts = [], []
+            for src_text, tgt_text in zip(src_texts, tgt_texts, strict=False):
+                if len(self.src_tokenizer.tokenize(src_text)) > max_sequence_length:
+                    continue
+                if len(self.tgt_tokenizer.tokenize(tgt_text)) > max_sequence_length:
+                    continue
+                self.src_texts.append(src_text)
+                self.tgt_texts.append(tgt_text)
         else:
-            self._build_vocabs(vocab_min_freq=vocab_min_freq, extend_with_glove=extend_vocab_with_glove)
+            self.src_texts = src_texts
+            self.tgt_texts = tgt_texts
+
+        if self.src_tokenizer.vocab_size == 0 or self.tgt_tokenizer.vocab_size == 0:
+            if "extend_vocab_with_glove" in kwargs and "glove_version" in kwargs:
+                self._build_vocabs(
+                    vocab_min_freq=kwargs.get("vocab_min_freq", 2),
+                    extend_with_glove=kwargs.get("extend_vocab_with_glove", True),
+                    glove_version=kwargs.get("glove_version", "glove.2024.wikigiga.50d"),
+                )
+            else:
+                self._build_vocabs(kwargs.get("vocab_min_freq", 2))
 
     def _build_vocabs(self, vocab_min_freq: int = 2, extend_with_glove: bool = False, **kwargs) -> None:
         """Build vocabularies for tokenizers."""
@@ -487,12 +487,8 @@ class TranslationDataset(Dataset):
         print("Building vocabs, it may take a few minutes...")
 
         # Provides lists of tokens. Here the lists are not converted to sets cause the tokenizer may need the token frequencies
-        src_tokens = [
-            token for el in self.dataset for token in self.src_tokenizer.tokenize(el["translation"][self.src_lang])
-        ]
-        tgt_tokens = [
-            token for el in self.dataset for token in self.tgt_tokenizer.tokenize(el["translation"][self.tgt_lang])
-        ]
+        src_tokens = [token for text in self.src_texts for token in self.src_tokenizer.tokenize(text)]
+        tgt_tokens = [token for text in self.tgt_texts for token in self.tgt_tokenizer.tokenize(text)]
 
         self.src_tokenizer.build_vocab_parallel(
             src_tokens,
@@ -510,12 +506,11 @@ class TranslationDataset(Dataset):
         )
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.src_texts)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor | str]:
-        example = self.dataset[idx]
-        src_text = example["translation"][self.src_lang]
-        tgt_text = example["translation"][self.tgt_lang]
+        src_text = self.src_texts[idx]
+        tgt_text = self.tgt_texts[idx]
 
         # src and tgt sequence lengths must be the same to properly compute cross attention
         # The smaller sequence will be padded to the length of the longer sequence
@@ -534,3 +529,129 @@ class TranslationDataset(Dataset):
             "src_text": src_text,
             "tgt_text": tgt_text,
         }
+
+
+def build_data_utils(
+    config: DictConfig | ListConfig, return_all: bool = False
+) -> (
+    tuple[DataLoader, DataLoader]
+    | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, WordTokenizer, WordTokenizer]
+):
+    """Build tokenizers, datasets and dataloaders for Machine Translation.
+    Designed to support torch ignite distributed training.
+
+    Args:
+        config (DictConfig | ListConfig): Configuration object from omegaconf.
+        return_all (bool, optional): Whether to return dataloaders, datasets and tokenizers. Defaults to False.
+
+    Returns:
+        tuple[DataLoader, DataLoader] | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, WordTokenizer, WordTokenizer]: Dataloaders or dataloaders, datasets and tokenizers.
+    """
+
+    if config.training_hp.distributed_training:
+        local_rank = idist.get_local_rank()
+        if local_rank > 0:
+            idist.barrier()
+
+    data = load_dataset(config.dataset.dataset_id, config.dataset.dataset_name, cache_dir=config.cache_ds_path)["train"]
+
+    src_lang = config.dataset.src_lang
+    tgt_lang = config.dataset.tgt_lang
+
+    # Downsample the dataset. Mainly for computational contraints and to make tests.
+    if config.dataset.max_len != -1:
+        data = data.select(range(config.dataset.max_len))
+
+    split = data.train_test_split(train_size=config.dataset.train_split, seed=config.seed)
+    train_data = split["train"]
+    test_data = split["test"]
+
+    train_src_texts = [text[src_lang] for text in train_data["translation"]]
+    train_tgt_texts = [text[tgt_lang] for text in train_data["translation"]]
+    test_src_texts = [text[src_lang] for text in test_data["translation"]]
+    test_tgt_texts = [text[tgt_lang] for text in test_data["translation"]]
+
+    # Build tokenizers and vocabs. Both src and tgt tokenizers vocabs are built using the training data
+    special_tokens = {
+        "sos_token": config.dataset.sos_token,
+        "eos_token": config.dataset.eos_token,
+        "pad_token": config.dataset.pad_token,
+        "unk_token": config.dataset.unk_token,
+    }
+
+    src_tokenizer = WordTokenizer(special_tokens)
+    tgt_tokenizer = WordTokenizer(special_tokens)
+
+    src_tokens = [token for text in train_src_texts for token in src_tokenizer.tokenize(text)]
+    tgt_tokens = [token for text in train_tgt_texts for token in tgt_tokenizer.tokenize(text)]
+
+    src_tokenizer.build_vocab_parallel(
+        src_tokens,
+        min_freq=config.dataset.vocab_min_freq,
+        extend_with_glove=bool(
+            src_lang == "en"
+        ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
+        glove_version=config.model_configs[config.chosen_model_size].glove_version,
+    )
+    tgt_tokenizer.build_vocab_parallel(
+        tgt_tokens,
+        min_freq=config.dataset.vocab_min_freq,
+        extend_with_glove=bool(tgt_lang == "en"),
+        glove_version=config.model_configs[config.chosen_model_size].glove_version,
+    )
+
+    train_dataset = TranslationDataset(
+        train_src_texts,
+        train_tgt_texts,
+        src_tokenizer,
+        tgt_tokenizer,
+        src_lang=config.dataset.src_lang,
+        tgt_lang=config.dataset.tgt_lang,
+        max_sequence_length=config.model_parameters.tokenizer_max_len,
+    )
+    test_dataset = TranslationDataset(
+        test_src_texts,
+        test_tgt_texts,
+        src_tokenizer,
+        tgt_tokenizer,
+        src_lang=config.dataset.src_lang,
+        tgt_lang=config.dataset.tgt_lang,
+        max_sequence_length=config.model_parameters.tokenizer_max_len,
+    )
+
+    if config.training_hp.distributed_training:
+        if local_rank == 0:
+            idist.barrier()
+        train_dataloader = idist.auto_dataloader(
+            train_dataset,
+            batch_size=config.train_dataloader.batch_size,
+            num_workers=config.train_dataloader.num_workers,
+            shuffle=config.train_dataloader.shuffle,
+            drop_last=config.train_dataloader.drop_last,
+        )
+        test_dataloader = idist.auto_dataloader(
+            test_dataset,
+            batch_size=config.test_dataloader.batch_size,
+            num_workers=config.test_dataloader.num_workers,
+            shuffle=config.test_dataloader.shuffle,
+            drop_last=config.test_dataloader.drop_last,
+        )
+    else:
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=config.train_dataloader.batch_size,
+            num_workers=config.train_dataloader.num_workers,
+            shuffle=config.train_dataloader.shuffle,
+            drop_last=config.train_dataloader.drop_last,
+        )
+        test_dataloader = DataLoader(
+            test_dataset,
+            batch_size=config.test_dataloader.batch_size,
+            num_workers=config.test_dataloader.num_workers,
+            shuffle=config.test_dataloader.shuffle,
+            drop_last=config.test_dataloader.drop_last,
+        )
+
+    if return_all:
+        return train_dataloader, test_dataloader, train_dataset, test_dataset, src_tokenizer, tgt_tokenizer
+    return train_dataloader, test_dataloader
