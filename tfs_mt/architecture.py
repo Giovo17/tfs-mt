@@ -121,11 +121,13 @@ class MultiHeadAttention(nn.Module):
         """
         QKt = torch.matmul(query, key.transpose(-2, -1)) / self.scaling_factor
 
-        print(QKt)  # debug
+        # NOTE Moved in Transformer forward method for efficiency
+        # Reshape from [B, S] to [B, 1, 1, S] to properly broadcast attention mask to all QKt matrices
+        # Broadcasting doc: https://docs.pytorch.org/docs/stable/notes/broadcasting.html
+        # attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+
         if attention_mask is not None:
-            print("Applying mask")  # debug
             QKt.masked_fill_(attention_mask == False, float("-inf"))
-        print(QKt)  # debug
 
         QKt_norm = torch.softmax(QKt, dim=-1)
 
@@ -336,6 +338,11 @@ class Transformer(nn.Module):
         tgt_x = self.tgt_embeddings(tgt_sequence)
         src_x = self.src_pos_embeddings(src_x)
         tgt_x = self.tgt_pos_embeddings(tgt_x)
+
+        # Reshape from [B, S] to [B, 1, 1, S] to properly broadcast attention mask to all QKt matrices
+        # Broadcasting doc: https://docs.pytorch.org/docs/stable/notes/broadcasting.html
+        src_mask = src_mask.unsqueeze(1).unsqueeze(2)
+        tgt_mask = tgt_mask.unsqueeze(1).unsqueeze(2)
 
         encoder_representation = src_x
         for i in range(len(self.encoder)):
