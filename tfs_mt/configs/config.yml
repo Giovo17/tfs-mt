@@ -2,11 +2,6 @@ project: tfs_mt
 
 seed: 42
 
-sos_token: "<s>"
-eos_token: "</s>"
-pad_token: "<PAD>"
-unk_token: "<UNK>"
-
 
 model_base_name: tfs_mt
 model_parameters:
@@ -49,6 +44,7 @@ training_hp:
     load_full_checkpoint: False
     load_model_only: False
     load_checkpoint_path: None
+  distributed_training: True
 
   loss_type: crossentropy
   loss_args: None
@@ -70,16 +66,21 @@ dataset:
   test_split: 0.2
   src_lang: "en"
   tgt_lang: "it"
+  sos_token: "<s>"
+  eos_token: "</s>"
+  pad_token: "<PAD>"
+  unk_token: "<UNK>"
+  vocab_min_freq: 2
+  max_len: -1
 
 train_dataloader:
   batch_size: 32
-  shuffle: True
   num_workers: 4
+  shuffle: True
   drop_last: True
 
 test_dataloader:
   batch_size: 32
-  shuffle: False
   num_workers: 4
-  prefetch_factor: 4
+  shuffle: False
   drop_last: False
