@@ -4,8 +4,8 @@ seed: 42
 
 sos_token: "<s>"
 eos_token: "</s>"
-pad_token: "<pad>"
-unk_token: "<unk>"
+pad_token: "<PAD>"
+unk_token: "<UNK>"
 
 
 model_base_name: tfs_mt
@@ -14,29 +14,32 @@ model_parameters:
   tokenizer_max_len: 128
 
 model_configs:
+  pretrained_word_embeddings: "GloVe"
+  positional_embeddings: "sinusoidal"
   nano:
-    d_model: 128
-    static_word_embeddings_dim: 50
-    num_heads: 2
-    num_encoder_layers: 2
-    num_decoder_layers: 2
-    d_mlp: 200
-  small:
-    d_model: 256
-    static_word_embeddings_dim: 100
-    num_heads: 4
     num_encoder_layers: 4
     num_decoder_layers: 4
-    d_mlp: 400
+    d_model: 50
+    num_heads: 4
+    d_ff: 200
+    glove_version: "glove.2024.wikigiga.50d"
+    glove_filename: "wiki_giga_2024_50_MFT20_vectors_seed_123_alpha_0.75_eta_0.075_combined"
+  small:
+    num_encoder_layers: 5
+    num_decoder_layers: 5
+    d_model: 100
+    num_heads: 6
+    d_ff: 400
+    glove_version: "glove.2024.wikigiga.100d"
+    glove_filename: "wiki_giga_2024_100_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05.050_combined"
   base:
-    d_model: 512
-    static_word_embeddings_dim: 200
-    num_heads: 8
     num_encoder_layers: 6
     num_decoder_layers: 6
-    d_mlp: 800
-  pretrained_word_embeddings: "GloVe"  # [GloVe, Word2Vec]
-  positional_embeddings: "sinusoidal"
+    d_model: 200
+    num_heads: 8
+    d_ff: 800
+    glove_version: "glove.2024.wikigiga.50d"
+    glove_filename: "wiki_giga_2024_50_MFT20_vectors_seed_123_alpha_0.75_eta_0.075_combined"
 
 
 training_hp:
