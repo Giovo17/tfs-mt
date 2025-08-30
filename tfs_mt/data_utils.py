@@ -404,8 +404,9 @@ class WordTokenizer:
         ]
 
         if pad_to_len is not None:  # Pad sequence to pad_to_len
+            pad_to_len += 2  # Considering SOS and EOS tokens
             token_ids.extend([
-                self.token_to_idx[self.special_tokens["pad_token"]] for _ in range(pad_to_len - len(tokens))
+                int(self.token_to_idx[self.special_tokens["pad_token"]]) for _ in range(pad_to_len - len(tokens))
             ])
 
         # Disabling attention to pad tokens
