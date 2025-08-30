@@ -126,6 +126,15 @@ class MultiHeadAttention(nn.Module):
         # Broadcasting doc: https://docs.pytorch.org/docs/stable/notes/broadcasting.html
         # attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
 
+        # NOTE Moved in Transformer forward method for efficiency
+        # Build attention mask matrix with shape [B, 1, S, S] to properly mask QKt matrix
+        # eg. with considering only the last 2 dimensions
+        # input = [[ True,  True, False]]
+        # output = [[ True,  True, False],
+        #           [ True,  True, False],
+        #           [False, False, False]]
+        # attention_mask = torch.matmul(attention_mask.to(torch.int).transpose(-1,-2), attention_mask.to(torch.int)).to(torch.bool)
+
         if attention_mask is not None:
             QKt.masked_fill_(attention_mask == False, float("-inf"))
 
@@ -343,6 +352,22 @@ class Transformer(nn.Module):
         # Broadcasting doc: https://docs.pytorch.org/docs/stable/notes/broadcasting.html
         src_mask = src_mask.unsqueeze(1).unsqueeze(2)
         tgt_mask = tgt_mask.unsqueeze(1).unsqueeze(2)
+
+        # Build attention mask matrix with shape [B, 1, S, S] to properly mask QKt matrix
+        # eg. with considering only the last 2 dimensions
+        # input = [[ True,  True, False]]
+        # output = [[ True,  True, False],
+        #           [ True,  True, False],
+        #           [False, False, False]]
+        src_mask = torch.matmul(src_mask.to(torch.int).transpose(-1, -2), src_mask.to(torch.int)).to(torch.bool)
+        tgt_mask = torch.matmul(tgt_mask.to(torch.int).transpose(-1, -2), tgt_mask.to(torch.int)).to(torch.bool)
+
+        # Apply causal masking
+        # This speeds up computation since only one masked_fill will be applied in each decoder attention module
+        causal_mask = (
+            torch.triu(torch.ones((tgt_mask.shape[0], 1, tgt_mask.shape[-1], tgt_mask.shape[-1])), diagonal=1) == 0
+        )
+        tgt_mask = tgt_mask & causal_mask  # Extract intersecation between pad_mask and causal mask
 
         encoder_representation = src_x
         for i in range(len(self.encoder)):
