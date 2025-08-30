@@ -353,7 +353,22 @@ class Transformer(nn.Module):
             decoder_output = self.decoder[i](decoder_output, encoder_representation, tgt_mask)
 
 
-def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_direction="en-it") -> Transformer:
+def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_direction: str = "en-it") -> Transformer:
+    """Build Transformer model.
+
+    Args:
+        model_size (str): Model size as configured in config yaml file.
+        src_tokenizer (_type_): Source text tokenizer.
+        tgt_tokenizer (_type_): Target text tokenizer.
+        language_direction (str, optional): Translation languages direction in '<src_lang>-<tgt_lang>' format. Defaults to "en-it".
+
+    Raises:
+        LanguageDirectionInvalidFormat: Raise when language direction is not in the correct format.
+
+    Returns:
+        Transformer: Initialized Transformer model according to config yaml file and choosen model size.
+    """
+
     import os
     import re
 
@@ -361,25 +376,27 @@ def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_directio
 
     CONFIG = load_config()
 
-    if not re.match(r"^[a-z]{2}-[a-z]{2}$"):  # Ensure languange direction is in the default like format
+    if not re.match(
+        r"^[a-z]{2}-[a-z]{2}$", language_direction
+    ):  # Ensure languange direction is in the default like format
         raise LanguageDirectionInvalidFormat(language_direction)
 
     if "en" not in language_direction:  # GloVe embeddings available only for English language
         model = Transformer(
             src_tokenizer.vocab_size,
             tgt_tokenizer.vocab_size,
-            num_encoder_blocks=CONFIG["model_configs"]["nano"]["num_encoder_layers"],
-            num_decoder_blocks=CONFIG["model_configs"]["nano"]["num_decoder_layers"],
-            d_model=CONFIG["model_configs"]["nano"]["d_model"],
-            num_heads=CONFIG["model_configs"]["nano"]["num_heads"],
-            d_ff=CONFIG["model_configs"]["nano"]["d_ff"],
+            num_encoder_blocks=CONFIG["model_configs"][model_size]["num_encoder_layers"],
+            num_decoder_blocks=CONFIG["model_configs"][model_size]["num_decoder_layers"],
+            d_model=CONFIG["model_configs"][model_size]["d_model"],
+            num_heads=CONFIG["model_configs"][model_size]["num_heads"],
+            d_ff=CONFIG["model_configs"][model_size]["d_ff"],
             dropout_prob=CONFIG["model_parameters"]["dropout"],
         )
         model.init_params()
 
     else:
-        glove_version = CONFIG["model_configs"]["nano"]["glove_version"]
-        glove_filename = CONFIG["model_configs"]["nano"]["glove_filename"]
+        glove_version = CONFIG["model_configs"][model_size]["glove_version"]
+        glove_filename = CONFIG["model_configs"][model_size]["glove_filename"]
 
         glove_path = os.path.join(os.getcwd(), f"data/{glove_version}/{glove_filename}.txt")
 
@@ -387,11 +404,11 @@ def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_directio
             model = Transformer(
                 src_tokenizer.vocab_size,
                 tgt_tokenizer.vocab_size,
-                num_encoder_blocks=CONFIG["model_configs"]["nano"]["num_encoder_layers"],
-                num_decoder_blocks=CONFIG["model_configs"]["nano"]["num_decoder_layers"],
-                d_model=CONFIG["model_configs"]["nano"]["d_model"],
-                num_heads=CONFIG["model_configs"]["nano"]["num_heads"],
-                d_ff=CONFIG["model_configs"]["nano"]["d_ff"],
+                num_encoder_blocks=CONFIG["model_configs"][model_size]["num_encoder_layers"],
+                num_decoder_blocks=CONFIG["model_configs"][model_size]["num_decoder_layers"],
+                d_model=CONFIG["model_configs"][model_size]["d_model"],
+                num_heads=CONFIG["model_configs"][model_size]["num_heads"],
+                d_ff=CONFIG["model_configs"][model_size]["d_ff"],
                 dropout_prob=CONFIG["model_parameters"]["dropout"],
                 src_emb_from_pretrained=True,
                 src_emb_pretrained_type=CONFIG["model_configs"]["pretrained_word_embeddings"],
@@ -404,11 +421,11 @@ def build_model(model_size: str, src_tokenizer, tgt_tokenizer, language_directio
             model = Transformer(
                 src_tokenizer.vocab_size,
                 tgt_tokenizer.vocab_size,
-                num_encoder_blocks=CONFIG["model_configs"]["nano"]["num_encoder_layers"],
-                num_decoder_blocks=CONFIG["model_configs"]["nano"]["num_decoder_layers"],
-                d_model=CONFIG["model_configs"]["nano"]["d_model"],
-                num_heads=CONFIG["model_configs"]["nano"]["num_heads"],
-                d_ff=CONFIG["model_configs"]["nano"]["d_ff"],
+                num_encoder_blocks=CONFIG["model_configs"][model_size]["num_encoder_layers"],
+                num_decoder_blocks=CONFIG["model_configs"][model_size]["num_decoder_layers"],
+                d_model=CONFIG["model_configs"][model_size]["d_model"],
+                num_heads=CONFIG["model_configs"][model_size]["num_heads"],
+                d_ff=CONFIG["model_configs"][model_size]["d_ff"],
                 dropout_prob=CONFIG["model_parameters"]["dropout"],
                 tgt_emb_from_pretrained=True,
                 tgt_emb_pretrained_type=CONFIG["model_configs"]["pretrained_word_embeddings"],
