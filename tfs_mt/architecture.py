@@ -134,6 +134,7 @@ class MultiHeadAttention(nn.Module):
         if attention_mask is not None:
             QKt.masked_fill_(attention_mask == False, float("-inf"))
 
+        # Applying the softmax on last dim makes results in a QKt matrix with normalized rows
         QKt_norm = torch.softmax(QKt, dim=-1)
 
         return torch.matmul(QKt_norm, value)

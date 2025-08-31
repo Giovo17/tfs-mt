@@ -1,15 +1,20 @@
 import os
 import zipfile
 from collections import Counter
+from functools import partial
 from multiprocessing import Pool
 
 import ignite.distributed as idist
 import requests
 import torch
 from datasets import load_dataset
+from omegaconf import OmegaConf
 from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
+
+config = OmegaConf.load(os.path.join(os.getcwd(), "tfs_mt/configs/config.yml"))
 
 
 class VocabNotBuiltError(Exception):
@@ -531,6 +536,25 @@ class TranslationDataset(Dataset):
         }
 
 
+def batch_collate_fn(
+    batch: dict[str, torch.Tensor | list[str]], src_pad_token_id: int, tgt_pad_token_id: int
+) -> dict[str, torch.Tensor | list[str]]:
+    keys = batch[0].keys()
+    result = {}
+
+    for key in keys:
+        field_data = [sample[key] for sample in batch]
+
+        if isinstance(field_data[0], torch.Tensor):
+            pad_token_id = src_pad_token_id if key.startswith("src") else tgt_pad_token_id
+            padded_seq = pad_sequence(field_data, batch_first=True, padding_value=pad_token_id)
+            result[key] = padded_seq
+        else:  # src_text and tgt_text
+            result[key] = field_data
+
+    return result
+
+
 def build_data_utils(
     config: DictConfig | ListConfig, return_all: bool = False
 ) -> (
@@ -600,6 +624,15 @@ def build_data_utils(
         glove_version=config.model_configs[config.chosen_model_size].glove_version,
     )
 
+    config.dataset.src_sos_token_id = src_tokenizer.sos_token_idx
+    config.dataset.src_eos_token_id = src_tokenizer.eos_token_idx
+    config.dataset.src_pad_token_id = src_tokenizer.pad_token_idx
+    config.dataset.src_unk_token_id = src_tokenizer.unk_token_idx
+    config.dataset.tgt_sos_token_id = tgt_tokenizer.sos_token_idx
+    config.dataset.tgt_eos_token_id = tgt_tokenizer.eos_token_idx
+    config.dataset.tgt_pad_token_id = tgt_tokenizer.pad_token_idx
+    config.dataset.tgt_unk_token_id = tgt_tokenizer.unk_token_idx
+
     train_dataset = TranslationDataset(
         train_src_texts,
         train_tgt_texts,
@@ -619,38 +652,33 @@ def build_data_utils(
         max_sequence_length=config.model_parameters.tokenizer_max_len,
     )
 
-    if config.training_hp.distributed_training:
-        if local_rank == 0:
-            idist.barrier()
-        train_dataloader = idist.auto_dataloader(
-            train_dataset,
-            batch_size=config.train_dataloader.batch_size,
-            num_workers=config.train_dataloader.num_workers,
-            shuffle=config.train_dataloader.shuffle,
-            drop_last=config.train_dataloader.drop_last,
-        )
-        test_dataloader = idist.auto_dataloader(
-            test_dataset,
-            batch_size=config.test_dataloader.batch_size,
-            num_workers=config.test_dataloader.num_workers,
-            shuffle=config.test_dataloader.shuffle,
-            drop_last=config.test_dataloader.drop_last,
-        )
-    else:
-        train_dataloader = DataLoader(
-            train_dataset,
-            batch_size=config.train_dataloader.batch_size,
-            num_workers=config.train_dataloader.num_workers,
-            shuffle=config.train_dataloader.shuffle,
-            drop_last=config.train_dataloader.drop_last,
-        )
-        test_dataloader = DataLoader(
-            test_dataset,
-            batch_size=config.test_dataloader.batch_size,
-            num_workers=config.test_dataloader.num_workers,
-            shuffle=config.test_dataloader.shuffle,
-            drop_last=config.test_dataloader.drop_last,
-        )
+    if local_rank == 0:
+        idist.barrier()
+    # Ignite autodataloader adapts for distributed and non-distributed configurations
+    train_dataloader = idist.auto_dataloader(
+        train_dataset,
+        batch_size=config.train_dataloader.batch_size,
+        num_workers=config.train_dataloader.num_workers,
+        collate_fn=partial(
+            batch_collate_fn,
+            src_pad_token_id=config.dataset.src_pad_token_id,
+            tgt_pad_token_id=config.dataset.tgt_pad_token_id,
+        ),
+        shuffle=config.train_dataloader.shuffle,
+        drop_last=config.train_dataloader.drop_last,
+    )
+    test_dataloader = idist.auto_dataloader(
+        test_dataset,
+        batch_size=config.test_dataloader.batch_size,
+        num_workers=config.test_dataloader.num_workers,
+        collate_fn=partial(
+            batch_collate_fn,
+            src_pad_token_id=config.dataset.src_pad_token_id,
+            tgt_pad_token_id=config.dataset.tgt_pad_token_id,
+        ),
+        shuffle=config.test_dataloader.shuffle,
+        drop_last=config.test_dataloader.drop_last,
+    )
 
     if return_all:
         return train_dataloader, test_dataloader, train_dataset, test_dataset, src_tokenizer, tgt_tokenizer
