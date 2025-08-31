@@ -8,13 +8,10 @@ import ignite.distributed as idist
 import requests
 import torch
 from datasets import load_dataset
-from omegaconf import OmegaConf
 from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
-
-config = OmegaConf.load(os.path.join(os.getcwd(), "tfs_mt/configs/config.yml"))
 
 
 class VocabNotBuiltError(Exception):
