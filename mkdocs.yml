@@ -13,6 +13,7 @@ nav:
     - Architecture: modules/architecture.md
     - Embeddings: modules/embeddings.md
     - Data utils: modules/data_utils.md
+    - Training utils: modules/training_utils.md
 
 plugins:
   - search
