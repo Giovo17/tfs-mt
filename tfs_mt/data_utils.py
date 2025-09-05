@@ -468,13 +468,15 @@ class TranslationDataset(Dataset):
         self.max_sequence_length = max_sequence_length
 
         # Filter input data excluding texts longer than max_sequence_length
-        if max_sequence_length != -1:
+        if max_sequence_length > 0:
             print(f"Max sequence length set to {max_sequence_length}.")
             self.src_texts, self.tgt_texts = [], []
             for src_text, tgt_text in zip(src_texts, tgt_texts, strict=False):
-                if len(src_tokenizer.tokenize(src_text)) > max_sequence_length:
+                if (
+                    len(src_tokenizer.tokenize(src_text)) > max_sequence_length - 2
+                ):  # -2 accounts for SOS and EOS tokens that will be added in the __getitem__ method
                     continue
-                if len(tgt_tokenizer.tokenize(tgt_text)) > max_sequence_length:
+                if len(tgt_tokenizer.tokenize(tgt_text)) > max_sequence_length - 2:
                     continue
                 self.src_texts.append(src_text)
                 self.tgt_texts.append(tgt_text)
@@ -523,14 +525,17 @@ class TranslationDataset(Dataset):
         src_text = self.src_texts[idx]
         tgt_text = self.tgt_texts[idx]
 
+        src_text_tokenized = self.src_tokenizer.tokenize(src_text)
+        tgt_text_tokenized = self.tgt_tokenizer.tokenize(tgt_text)
+
         # src and tgt sequence lengths must be the same to properly compute cross attention
         # The smaller sequence will be padded to the length of the longer sequence
         # Attention mask ensure no attention is computed with pad tokens
-        max_seq_len = max(len(src_text), len(tgt_text))
+        max_seq_len = max(len(src_text_tokenized), len(tgt_text_tokenized))
 
         # Tokenize texts
-        src_tokens, src_mask = self.src_tokenizer.encode(src_text, pad_to_len=max_seq_len)
-        tgt_tokens, src_mask = self.tgt_tokenizer.encode(tgt_text, pad_to_len=max_seq_len)
+        src_tokens, src_mask = self.src_tokenizer.encode(src_text_tokenized, pad_to_len=max_seq_len)
+        tgt_tokens, src_mask = self.tgt_tokenizer.encode(tgt_text_tokenized, pad_to_len=max_seq_len)
 
         return {
             "src": torch.tensor(src_tokens, dtype=torch.long),
