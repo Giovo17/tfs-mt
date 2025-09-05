@@ -63,9 +63,10 @@ class WordTokenizer:
     Mainly used to let the model be compatible with pretrained GloVe embeddings.
 
     Args:
-        special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. BOS_TOKEN, EOS_TOKEN. Defaults to None.
+        special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. BOS_TOKEN, EOS_TOKEN.
         contractions (dict[str, str] | None, optional): Contractions to be considered, eg. 's, 'll . Defaults to None.
         num_workers (int, optional): Number of CPU threads to use in parallel operations, eg. token counting or GloVe token extraction. Defaults to 4.
+        tokenizer_max_len (int, optional): Tokenizer max sequence length. Mainly used to limit memory usage and performance impact during training and inference due to attention quadratic complexity. Defaults to 128.
     """
 
     def __init__(
@@ -372,17 +373,22 @@ class WordTokenizer:
         print(f"Built vocabulary with {len(vocab)} tokens.")
 
     def encode(self, input_sequence: str | list[str], pad_to_len: int | None = None) -> tuple[list[int], list[bool]]:
-        """Encode text to token IDs.
+        """Tokenizer encode function.
+
+        It also returns the mask to be used during attention in order not compute it with respect to PAD tokens.
+        The mask is designed to True where there's a token with the model has to compute attention to, False otherwise.
 
         Args:
-            text (str): Text to be encoded.
+            input_sequence (str | list[str]): Sequence to be encoded.
+            pad_to_len (int | None, optional): Sequence length to pad `input_sequence` with. Defaults to None.
 
         Raises:
-            VocabNotBuiltError: Vocabulary is not built.
+            VocabNotBuiltError: Raised when vocabulary is not built.
 
         Returns:
-            list[int]: List of token ids.
+            tuple[list[int], list[bool]]: List of token ids and mask.
         """
+
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
 
@@ -390,8 +396,10 @@ class WordTokenizer:
         tokens = self.tokenize(input_sequence) if isinstance(input_sequence, str) else input_sequence
 
         # Add SOS and EOS tokens to given sequence
-        tokens.insert(0, self.special_tokens["sos_token"])
-        tokens.append(self.special_tokens["eos_token"])
+        if tokens[0] != self.special_tokens["sos_token"]:
+            tokens.insert(0, self.special_tokens["sos_token"])
+        if tokens[-1] != self.special_tokens["eos_token"]:
+            tokens.append(self.special_tokens["eos_token"])
 
         token_ids = [
             self.token_to_idx[token]
@@ -403,7 +411,7 @@ class WordTokenizer:
         if pad_to_len is not None:  # Pad sequence to pad_to_len
             pad_to_len += 2  # Considering SOS and EOS tokens
             token_ids.extend([
-                int(self.token_to_idx[self.special_tokens["pad_token"]]) for _ in range(pad_to_len - len(tokens))
+                self.token_to_idx[self.special_tokens["pad_token"]] for _ in range(pad_to_len - len(tokens))
             ])
 
         # Disabling attention to pad tokens
@@ -433,12 +441,13 @@ class TranslationDataset(Dataset):
     """Translation Dataset.
 
     Args:
-        dataset (datasets.Dataset): The Hugging Face dataset containing text samples to be processed.
+        src_texts (list[str]): List of source texts.
+        tgt_texts (list[str]): List of target texts.
         src_tokenizer (WordTokenizer): Tokenizer used to preprocess the source language text.
         tgt_tokenizer (WordTokenizer): Tokenizer used to preprocess the target language text.
         src_lang (str): Identifier for the source language, e.g., `"en"` for English.
         tgt_lang (str): Identifier for the target language, e.g., `"it"` for Italian.
-        max_length (int | None, optional): Maximum sequence length for tokenization. If None, sequences are not truncated. Defaults to None.
+        max_sequence_length (int | None, optional): Maximum sequence length for tokenization. If None, sequences are not truncated. Defaults to None.
     """
 
     def __init__(
@@ -463,9 +472,9 @@ class TranslationDataset(Dataset):
             print(f"Max sequence length set to {max_sequence_length}.")
             self.src_texts, self.tgt_texts = [], []
             for src_text, tgt_text in zip(src_texts, tgt_texts, strict=False):
-                if len(self.src_tokenizer.tokenize(src_text)) > max_sequence_length:
+                if len(src_tokenizer.tokenize(src_text)) > max_sequence_length:
                     continue
-                if len(self.tgt_tokenizer.tokenize(tgt_text)) > max_sequence_length:
+                if len(tgt_tokenizer.tokenize(tgt_text)) > max_sequence_length:
                     continue
                 self.src_texts.append(src_text)
                 self.tgt_texts.append(tgt_text)
@@ -536,6 +545,24 @@ class TranslationDataset(Dataset):
 def batch_collate_fn(
     batch: dict[str, torch.Tensor | list[str]], src_pad_token_id: int, tgt_pad_token_id: int
 ) -> dict[str, torch.Tensor | list[str]]:
+    """Used to tell the Dataloader how to properly build a batch.
+
+    In order to correctly build a batch every sequence in it has to have the same length,
+    so it pads the small sequences to the longest one. It does it for `src`, `tgt`, `src_mask` and `tgt_mask`.
+
+    This function needs a two pad token ids since in this Trasformer implementation there are 2 distinct tokenizers
+    with their own vocabulary.
+    Each vocabulary is built independently and in parallel, so there's no guarantee that the `pad_token` will have the same ID in both.
+
+    Args:
+        batch (dict[str, torch.Tensor  |  list[str]]): Batch of token ids and masks.
+        src_pad_token_id (int): Pad token for source sequences.
+        tgt_pad_token_id (int): Pad token for target sequences.
+
+    Returns:
+        dict[str, torch.Tensor | list[str]]: Batch with padded sequences.
+    """
+
     keys = batch[0].keys()
     result = {}
 
@@ -543,7 +570,13 @@ def batch_collate_fn(
         field_data = [sample[key] for sample in batch]
 
         if isinstance(field_data[0], torch.Tensor):
-            pad_token_id = src_pad_token_id if key.startswith("src") else tgt_pad_token_id
+            if key == "src":
+                pad_token_id = src_pad_token_id
+            elif key == "tgt":
+                pad_token_id = tgt_pad_token_id
+            else:  # mask tensors
+                pad_token_id = 0  # will be replaced with False
+
             padded_seq = pad_sequence(field_data, batch_first=True, padding_value=pad_token_id)
             result[key] = padded_seq
         else:  # src_text and tgt_text
@@ -603,6 +636,7 @@ def build_data_utils(
     src_tokenizer = WordTokenizer(special_tokens)
     tgt_tokenizer = WordTokenizer(special_tokens)
 
+    # To build the vocabularies texts are not filtered based on tokenizer.max_sequence_length
     src_tokens = [token for text in train_src_texts for token in src_tokenizer.tokenize(text)]
     tgt_tokens = [token for text in train_tgt_texts for token in tgt_tokenizer.tokenize(text)]
 
@@ -649,8 +683,9 @@ def build_data_utils(
         max_sequence_length=config.model_parameters.tokenizer_max_len,
     )
 
-    if local_rank == 0:
+    if config.training_hp.distributed_training and local_rank == 0:
         idist.barrier()
+
     # Ignite autodataloader adapts for distributed and non-distributed configurations
     train_dataloader = idist.auto_dataloader(
         train_dataset,
