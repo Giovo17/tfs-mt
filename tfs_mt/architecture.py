@@ -2,8 +2,17 @@ import math
 
 import torch
 import torch.nn as nn
+from omegaconf.dictconfig import DictConfig
+from omegaconf.listconfig import ListConfig
 
+from .data_utils import WordTokenizer
 from .embeddings import Embedding, SinusoidalPositionalEncoding
+
+
+class DimError(Exception):
+    def __init__(self, d_model, num_heads):
+        msg = f"d_model is not divisible by num_heads, got d_model = {d_model} and num_heads = {num_heads}."
+        super().__init__(msg)
 
 
 class MissingArgumentsError(Exception):
@@ -40,6 +49,21 @@ class MultiHeadAttention(nn.Module):
 
         self.d_model = d_model
         self.num_heads = num_heads
+
+        # NOTE Usually transformer models have d_model divisible by num_heads.
+        # This guarantees that the attention heads' outputs when stacked together are d_model shaped vectors (considering each embedding vector)
+        # In this implementation it has been preferred to remove this contraint. When exploiting the support of GloVe pretrained embeddings,
+        # d_model is fixed to GloVe embeddings sizes, namely 25, 50, 100, 200, 300, so in this scenario num_heads would be limited to predefined set of values due to int quantization.
+        # Considering the intermidiate output dimensions there will be no problems since the 3 initial projections matrices' shapes have been adjusted in order to map
+        # from d_model to num_heads * self.d_head (see below why the projection matrices are not splitted into head-specific matrices).
+        # Considering the final output dimensions the W_O matrix will project num_heads*d_head dimensional vectors into d_model vectors, so the whole operation
+        # continues to be mathematically consistent ensuring input and output dimension of this module are the same.
+        # eg. d_model = 50, num_heads = 4, d_head = int(d_model/num_heads) = 12
+        # q = x * W_Q   q shape is 48 (same goes to k and v), W_Q shape is 50x48   (in this example q is the concatention of the q vectors )
+        # output = attention_output * W_O   output shape is 50, W_O shape is 48x50
+        # if d_model % num_heads != 0:
+        #    raise DimError(d_model, num_heads)
+
         self.d_head = int(d_model / num_heads)  # Query, key and value embeddings dimension. d_k = d_v = d_head
 
         # Learnable projection matrices. Bias term is omitted since they are used as projections matrices.
@@ -67,10 +91,10 @@ class MultiHeadAttention(nn.Module):
         """MultiHead attention.
 
         Args:
-            x_query (torch.Tensor): Matrix of input embeddings of shape [B, S, D], where B is the batch size, S is the sequence length and D is d_model.
-            x_key (torch.Tensor): _description_
-            x_value (torch.Tensor): _description_
-            attention_mask (torch.Tensor | None, optional): Attention mask to avoid computing attention to padding tokens. It's also used to apply causal masking in decoder self attention. Defaults to None.
+            x_query (torch.Tensor): Matrix of input query embeddings of shape [B, S, D], where B is the batch size, S is the sequence length and D is d_model.
+            x_key (torch.Tensor): Matrix of input key embeddings of shape [B, S, D].
+            x_value (torch.Tensor): Matrix of input value embeddings of shape [B, S, D].
+            attention_mask (torch.BoolTensor | None, optional): Attention mask to avoid computing attention to padding tokens. It's also used to apply causal masking in decoder self attention. Defaults to None.
 
         Returns:
             torch.Tensor: Processed output tensor.
@@ -79,7 +103,7 @@ class MultiHeadAttention(nn.Module):
 
         # W_Q(x)          [B, S, D]
         # After reshape   [B, S, A, d_k]
-        # After transpose [B, A, S, _k] where A is num_heads and S is the sequence length
+        # After transpose [B, A, S, d_k] where A is num_heads and S is the sequence length
         query_matrices = self.W_Q(x_query).reshape(batch_size, -1, self.num_heads, self.d_head).transpose(1, 2)
         key_matrices = self.W_K(x_key).reshape(batch_size, -1, self.num_heads, self.d_head).transpose(1, 2)
         value_matrices = self.W_V(x_value).reshape(batch_size, -1, self.num_heads, self.d_head).transpose(1, 2)
@@ -87,11 +111,11 @@ class MultiHeadAttention(nn.Module):
         # Concatenated heads outputs, shape [B, A*d_k]
         attn_output = self.attention(query_matrices, key_matrices, value_matrices, attention_mask=attention_mask)
 
-        # Reshape back from [B, A, S, d_k] to [B, S, D]
-        attn_reshaped = attn_output.transpose(1, 2).reshape(batch_size, -1, self.num_heads * self.d_head)
+        # Reshape back from [B, A, S, d_k] to [B, S, A*d_k]
+        attn_output_reshaped = attn_output.transpose(1, 2).reshape(batch_size, -1, self.num_heads * self.d_head)
 
         # Attention scores, shape [B, S, D]. Combine heads outputs into a single D-dimensional output.
-        return self.W_O(attn_reshaped)
+        return self.W_O(attn_output_reshaped)
 
     def attention(
         self,
@@ -107,10 +131,10 @@ class MultiHeadAttention(nn.Module):
         $$
 
         Args:
-            query (_type_): _description_
-            key (_type_): _description_
-            value (_type_): _description_
-            attention_mask (torch.BoolTensor | None, optional): _description_. Defaults to None.
+            query (torch.Tensor): Matrix of input query embeddings of shape [B, S, D], where B is the batch size, S is the sequence length and D is d_model.
+            key (torch.Tensor): Matrix of input key embeddings of shape [B, S, D].
+            value (torch.Tensor): Matrix of input value embeddings of shape [B, S, D].
+            attention_mask (torch.BoolTensor | None, optional): Attention mask to avoid computing attention to padding tokens. It's also used to apply causal masking in decoder self attention. Defaults to None.
 
         Returns:
             torch.Tensor: Attention matrix.
@@ -179,10 +203,10 @@ class EncoderBlock(nn.Module):
     according to *On Layer Normalization in the Transformer Architecture* [[link](https://arxiv.org/abs/2002.04745)]
 
     Args:
-        d_model (int): _description_
-        num_heads (int): _description_
-        d_ff (int): _description_
-        dropout_prob (float, optional): _description_. Defaults to 0.1.
+        d_model (int): Model dimension.
+        num_heads (int): Number of attention heads.
+        d_ff (int): Size of middle feedforward layer.
+        dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
     """
 
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
@@ -215,10 +239,10 @@ class DecoderBlock(nn.Module):
     Using prenorm approach as in EncoderBlock.
 
     Args:
-        d_model (int): _description_
-        num_heads (int): _description_
-        d_ff (int): _description_
-        dropout_prob (float, optional): _description_. Defaults to 0.1.
+        d_model (int): Model dimension.
+        num_heads (int): Number of attention heads.
+        d_ff (int): Size of middle feedforward layer.
+        dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
     """
 
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
@@ -232,16 +256,18 @@ class DecoderBlock(nn.Module):
         self.layer_norm3 = LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout_prob)
 
-    def forward(self, x: torch.Tensor, encoder_output: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, encoder_representation: torch.Tensor, tgt_mask: torch.BoolTensor, src_mask
+    ) -> torch.Tensor:
         t1 = self.layer_norm1(x)
-        t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=attention_mask)
-        # We apply dropout [33] to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attentio is all you need page 8)
+        t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=tgt_mask)
+        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attentio is all you need page 8)
         t2 = self.dropout(t2)
         t3 = t2 + x
 
         t4 = self.layer_norm2(t3)
         t5 = self.cross_attention(
-            x_query=t4, x_key=encoder_output, x_value=encoder_output, attention_mask=attention_mask
+            x_query=t4, x_key=encoder_representation, x_value=encoder_representation, attention_mask=src_mask
         )
         t5 = self.dropout(t5)
         t6 = t5 + t3
@@ -260,7 +286,18 @@ class Transformer(nn.Module):
     Using Language Model head to map decoder output representation to tokens in vocabulary.
 
     Args:
+        src_vocab_size (int): Size of source language vocabulary.
+        tgt_vocab_size (int): Size of target language vocabulary.
+        num_encoder_blocks (int, optional): Number of encoder blocks. Defaults to 6.
+        num_decoder_blocks (int, optional): Number of decoder blocks. Defaults to 6.
+        d_model (int, optional): Model dimension. Defaults to 512.
+        num_heads (int, optional): Number of heads in MultiHead Attention. Defaults to 8.
+        d_ff (int, optional): Size of middle feedforward layer. Defaults to 2048.
+        dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
 
+    Raises:
+        MissingArgumentsError: Raised when `src_emb_from_pretrained` is supplied in `kwargs`, but `src_emb_pretrained_type` and `src_emb_pretrained_path` are not supplied. This error also applies for `tgt_emb_from_pretrained`.
+        MissingArgumentsGloVeError: Raised when GloVe embeddings from pretrained are wanted to be loaded and `src_tokenizer` is not supplied. This error also applies for `tgt_emb_from_pretrained`.
     """
 
     def __init__(
@@ -364,31 +401,36 @@ class Transformer(nn.Module):
         causal_mask = (
             torch.triu(torch.ones((tgt_mask.shape[0], 1, tgt_mask.shape[-1], tgt_mask.shape[-1])), diagonal=1) == 0
         )
-        tgt_mask = tgt_mask & causal_mask  # Extract intersecation between pad_mask and causal mask
+        tgt_mask = tgt_mask & causal_mask  # Extract intersection between pad_mask and causal mask
 
         encoder_representation = src_x
         for i in range(len(self.encoder)):
             encoder_representation = self.encoder[i](encoder_representation, src_mask)
 
-        decoder_output = tgt_x
+        decoder_representation = tgt_x
         for i in range(len(self.decoder)):
-            decoder_output = self.decoder[i](decoder_output, encoder_representation, tgt_mask)
+            decoder_representation = self.decoder[i](decoder_representation, encoder_representation, tgt_mask, src_mask)
+
+        decoder_output = self.unembedding_matrix(decoder_representation)
+
+        return decoder_output
 
 
-def build_model(config, src_tokenizer, tgt_tokenizer) -> Transformer:
-    """Build Transformer model.
+def build_model(
+    config: DictConfig | ListConfig, src_tokenizer: WordTokenizer, tgt_tokenizer: WordTokenizer
+) -> nn.Module:
+    """Build Transformer model according to a config file.
 
     Args:
-        model_size (str): Model size as configured in config yaml file.
-        src_tokenizer (_type_): Source text tokenizer.
-        tgt_tokenizer (_type_): Target text tokenizer.
-        language_direction (str, optional): Translation languages direction in '<src_lang>-<tgt_lang>' format. Defaults to "en-it".
+        config (DictConfig | ListConfig): Project config file.
+        src_tokenizer (WordTokenizer): Source text tokenizer.
+        tgt_tokenizer (WordTokenizer): Target text tokenizer.
 
     Raises:
-        LanguageDirectionInvalidFormat: Raise when language direction is not in the correct format.
+        ModelSizeNotChoosen: Raised when config doesn't have `chosen_model_size` key.
 
     Returns:
-        Transformer: Initialized Transformer model according to config yaml file and choosen model size.
+        nn.Module: Initialized Transformer model according to config yaml file and choosen model size.
     """
 
     import os
