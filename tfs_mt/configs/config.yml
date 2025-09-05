@@ -1,6 +1,9 @@
-project: tfs_mt
-
 seed: 42
+
+log_every_iters: 2_000
+save_every_iters: 20_000
+checkpoints_retain_n: 5
+time_limit_sec: -1
 
 
 model_base_name: tfs_mt
@@ -33,21 +36,24 @@ model_configs:
     d_model: 200
     num_heads: 8
     d_ff: 800
-    glove_version: "glove.2024.wikigiga.50d"
-    glove_filename: "wiki_giga_2024_50_MFT20_vectors_seed_123_alpha_0.75_eta_0.075_combined"
+    glove_version: "glove.2024.wikigiga.200d"
+    glove_filename: "wiki_giga_2024_200_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05_combined"
 
 
 training_hp:
   num_epochs: 100
-  calculate_metrics: True
+  num_warmup_epochs: 10
   load_checkpoint:
     load_full_checkpoint: False
     load_model_only: False
     load_checkpoint_path: None
   distributed_training: True
+  use_amp: True
 
   loss_type: crossentropy
   loss_args: None
+
+  early_stopping_patience: 5
 
   optimizer_type: adamw
   optimizer_args:
@@ -56,7 +62,6 @@ training_hp:
     beta1: 0.9
     beta2: 0.999
     eps: 1e-8
-
 
 dataset:
   dataset_task: machine-translation
