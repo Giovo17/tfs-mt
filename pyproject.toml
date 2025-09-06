@@ -51,6 +51,8 @@ dev = [
     "torchinfo>=1.8.0",
     "ipywidgets>=8.1.7",
     "seaborn>=0.13.2",
+    "wandb>=0.21.3",
+    "python-dotenv>=1.1.1",
 ]
 
 [build-system]
