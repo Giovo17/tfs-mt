@@ -397,14 +397,14 @@ class Transformer(nn.Module):
         # output = [[ True,  True, False],
         #           [ True,  True, False],
         #           [False, False, False]]
-        src_mask = torch.matmul(src_mask.to(torch.int).transpose(-1, -2), src_mask.to(torch.int)).to(torch.bool)
-        tgt_mask = torch.matmul(tgt_mask.to(torch.int).transpose(-1, -2), tgt_mask.to(torch.int)).to(torch.bool)
+        src_mask = torch.matmul(src_mask.to(torch.float).transpose(-1, -2), src_mask.to(torch.float)).to(torch.bool)
+        tgt_mask = torch.matmul(tgt_mask.to(torch.float).transpose(-1, -2), tgt_mask.to(torch.float)).to(torch.bool)
 
         # Apply causal masking
         # This speeds up computation since only one masked_fill will be applied in each decoder attention module
         causal_mask = (
             torch.triu(torch.ones((tgt_mask.shape[0], 1, tgt_mask.shape[-1], tgt_mask.shape[-1])), diagonal=1) == 0
-        )
+        ).to(tgt_mask.device)
         tgt_mask = tgt_mask & causal_mask  # Extract intersection between pad_mask and causal mask
 
         encoder_representation = src_x
