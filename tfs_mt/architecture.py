@@ -156,6 +156,10 @@ class MultiHeadAttention(nn.Module):
         # attention_mask = torch.matmul(attention_mask.to(torch.int).transpose(-1,-2), attention_mask.to(torch.int)).to(torch.bool)
 
         if attention_mask is not None:
+            # NOTE Adding this control to correctly process masking considering that target input sequence will be shrinked by one token
+            # This is expecially needed when computing cross attention in decoder blocks due to the usage of src_mask which cannot be shrinked accordingly a priori
+            if attention_mask.shape[-1] > QKt.shape[-1] or attention_mask.shape[-2] > QKt.shape[-2]:
+                attention_mask = attention_mask[:, :, : QKt.shape[-2], : QKt.shape[-1]]
             QKt.masked_fill_(attention_mask == False, float("-inf"))
 
         # Applying the softmax on last dim makes results in a QKt matrix with normalized rows
