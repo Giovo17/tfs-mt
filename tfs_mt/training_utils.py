@@ -11,6 +11,7 @@ from ignite.engine import DeterministicEngine, Engine, Events
 from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
 from ignite.handlers.early_stopping import EarlyStopping
 from ignite.handlers.time_limit import TimeLimit
+from ignite.handlers.wandb_logger import WandBLogger
 from ignite.metrics.metric import Metric
 from ignite.utils import setup_logger
 from omegaconf import OmegaConf
@@ -20,6 +21,8 @@ from torch import nn
 from torch.amp import GradScaler, autocast
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DistributedSampler, Sampler
+
+from .data_utils import WordTokenizer
 
 
 class CheckpointNotFoundError(Exception):
@@ -53,7 +56,7 @@ def resume_from(
         to_load (Mapping): A dictionary with objects, e.g. {“model”: model, “optimizer”: optimizer, ...}
         checkpoint_filepath (str): Path to the checkpoint file.
         logger (Logger): To log info about resuming from a checkpoint.
-        strict (bool, optional): Whether to strictly enforce that the keys in `state_dict` match the keys returned by this module’s `state_dict()` function. Defaults to True.
+        strict (bool, optional): Whether to strictly enforce that the keys in `state_dict` match the keys returned by this module's `state_dict()` function. Defaults to True.
         model_dir (str | None, optional): Directory in which to save the object. Defaults to None.
 
     Raises:
@@ -105,14 +108,28 @@ def setup_logging(config: DictConfig | ListConfig) -> Logger:
     return logger
 
 
-def setup_exp_logging(config, trainer, optimizers, evaluators):
-    """Setup Experiment Tracking logger from Ignite."""
-    logger = common.setup_tb_logging(
-        config.output_dir,
+def setup_exp_logging(config, trainer, optimizers, evaluators) -> WandBLogger:
+    """Setup Experiment Tracking WandB logger from Ignite.
+
+    Using common.setup_wandb_logging which setup an ignite's Engine compatible WandB logger.
+    It takes as kwargs wandb.init compatible arguments.
+
+    References:
+    1. setup_wandb_logging documentation [[link](https://docs.pytorch.org/ignite/contrib/engines.html#ignite.contrib.engines.common.setup_wandb_logging)]
+    2. WandBLogger documentation [[link](https://docs.pytorch.org/ignite/generated/ignite.handlers.wandb_logger.html#ignite.handlers.wandb_logger.WandBLogger)]
+    3. wandb.init documentation [[link](https://docs.wandb.ai/ref/python/sdk/functions/init/)]
+    """
+    logger = common.setup_wandb_logging(
         trainer,
         optimizers,
         evaluators,
         config.log_every_iters,
+        # wandb.init kwargs
+        entity=config.wandb_organization,
+        project=config.model_base_name,
+        name=config.model_name,
+        config=config._content,
+        tags=["pytorch", "pytorch", "nlp", "machine-translation"],
     )
     return logger
 
@@ -123,11 +140,12 @@ def setup_handlers(
     config: DictConfig | ListConfig,
     to_save_train: dict | None = None,
     to_save_test: dict | None = None,
-):
+) -> tuple[Checkpoint, Checkpoint]:
     """Setup Ignite handlers."""
 
     ckpt_handler_train = ckpt_handler_test = None
-    # checkpointing
+
+    # Checkpointing
     saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
     ckpt_handler_train = Checkpoint(
         to_save_train,
@@ -139,6 +157,7 @@ def setup_handlers(
         Events.ITERATION_COMPLETED(every=config.save_every_iters),
         ckpt_handler_train,
     )
+
     global_step_transform = None
     if to_save_train.get("trainer", None) is not None:
         global_step_transform = global_step_from_engine(to_save_train["trainer"])
@@ -153,22 +172,71 @@ def setup_handlers(
     )
     evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test)
 
-    # early stopping
+    # Early stopping
     def score_fn(engine: Engine):
         return engine.state.metrics["Bleu"]
 
     es = EarlyStopping(config.training_hp.early_stopping_patience, score_fn, trainer)
     evaluator.add_event_handler(Events.EPOCH_COMPLETED, es)
 
+    # Time limit reached policy to stop training. Mainly used in Kaggle due to 12 hours run limit.
     if config.time_limit_sec != -1:
         trainer.add_event_handler(Events.ITERATION_COMPLETED, TimeLimit(config.time_limit_sec))
 
     return ckpt_handler_train, ckpt_handler_test
 
 
-def thresholded_output_transform(output):
-    y_pred, y = output
-    return torch.round(torch.sigmoid(y_pred)), y
+def nlp_metric_transform(
+    output: tuple[torch.Tensor, torch.Tensor], tgt_tokenizer: WordTokenizer
+) -> tuple[list[list[str]], list[list[list[str]]]]:
+    """Transform `train_one_iter` output to be compliant with ignite nlp metrics.
+
+    References:
+    1. Bleu documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Bleu.html)]
+    2. Rouge documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Rouge.html)]
+
+    Args:
+        output (tuple[torch.Tensor, torch.Tensor]): Output of `train_one_iter`.
+        tgt_tokenizer (WordTokenizer): Target tokenizer used to decode tokens.
+
+    Returns:
+        tuple[list[list[str]], list[list[list[str]]]]: Metrics complatible output.
+    """
+
+    output_logits, tgt_output_label = output
+
+    # Get predicted tokens from logits
+    output_logits = output_logits.detach()
+    output_probs = torch.softmax(output_logits, dim=-1)
+    output_tokens = torch.argmax(output_probs, dim=-1)
+
+    # Move to list of int for tokenizer.decode compatibility
+    output_tokens = output_tokens.cpu().numpy().tolist()
+    tgt_output_label = tgt_output_label.cpu().numpy().tolist()
+
+    # Decode batched token sequences to lists of lists of vocab token sequences
+    y_pred = [tgt_tokenizer.decode(sample) for sample in output_tokens]
+    y = [tgt_tokenizer.decode(sample) for sample in tgt_output_label]
+
+    # Adjust shape. Ignite wants a corpus of lists of target label sentences for each hypotheses.
+    # Since the dataset proposes only one target translation for a given input, y is wrapped in a list.
+    y = [y]
+
+    return y_pred, y
+
+
+def loss_metric_transform(output: tuple[torch.Tensor, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Transform `train_one_iter` output to be compliant with torch loss computation.
+
+    Args:
+        output (tuple[torch.Tensor, torch.Tensor]): Output of `train_one_iter`.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: Loss compatible output.
+    """
+
+    output_logits, tgt_output_label = output
+    return output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1)
 
 
 def setup_trainer(
@@ -180,7 +248,7 @@ def setup_trainer(
     device: str | torch.device,
     train_sampler: Sampler,
 ) -> Engine | DeterministicEngine:
-    """Setup a trainer with distributed and mixed precision training support.
+    """Setup a trainer with multigpu and mixed precision training support.
 
     Args:
         config (DictConfig | ListConfig): Project config file.
@@ -189,7 +257,7 @@ def setup_trainer(
         loss_fn (nn.Module): Loss function.
         metrics (dict[str, Metric]): Metrics to be used.
         device (str | torch.device): Device.
-        train_sampler (Sampler): Torch data sampler. Use for distributed training.
+        train_sampler (Sampler): Torch data sampler. Use for multigpu training.
 
     Returns:
         Engine | DeterministicEngine: Trainer object.
@@ -199,15 +267,20 @@ def setup_trainer(
     # It helps prevent gradients with small magnitudes from underflowing when training with mixed precision.
     scaler = GradScaler(device, enabled=config.training_hp.use_amp)
 
-    def train_one_epoch(engine: Engine | DeterministicEngine, batch: dict[str, torch.Tensor | str]):
+    def train_one_iter(
+        engine: Engine | DeterministicEngine, batch: dict[str, torch.Tensor | str]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # non_blocking asynchronously transfers tensor from CPU to device. More here: https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html
         src_sequence = batch["src"].to(device, non_blocking=True, dtype=torch.long)
         tgt_sequence = batch["tgt"].to(device, non_blocking=True, dtype=torch.long)
         src_mask = batch["src_mask"].to(device, non_blocking=True, dtype=torch.long)
-        tgt_mask = batch["tgt_mask"].to(device, non_blocking=True, dtype=torch.long)
+        # Mask is not shrinked accordingly to tgt_sequence here. It will be handled during attention processing.
+        tgt_mask = batch["tgt_mask"].to(device, non_blocking=True, dtype=torch.long)  # [:, :-1]
 
-        # Shifted target sequence as label for teacher forcing
-        tgt_output_label = tgt_sequence[:, 1:].reshape(-1)
+        # Shifted target sequence as label for teacher forcing. Reshape to 1D tensor to later compute loss
+        tgt_output_label = tgt_sequence[:, 1:]
+
+        tgt_input_sequence = tgt_sequence[:, :-1]
 
         model.train()
 
@@ -216,9 +289,10 @@ def setup_trainer(
         # eg. matmul will cast to FP16 and it's a crucial part of the whole pipeline.
         # Here the complete list of FP16 supported modules: https://docs.pytorch.org/docs/stable/amp.html#cuda-ops-that-can-autocast-to-float16
         with autocast(device.type, dtype=torch.float16, enabled=config.training_hp.use_amp):
-            output_logits = model(src_sequence, tgt_sequence, src_mask, tgt_mask)
-            output_logits = output_logits.reshape(-1, output_logits.size(-1))  # [B*S, V]
-            loss = loss_fn(output_logits, tgt_output_label)
+            output_logits = model(src_sequence, tgt_input_sequence, src_mask, tgt_mask)
+            # output_logits shape: [B*S, V]  (B: batch size, S: sequence length, V: vocabulary size)
+            # tgt_output_label shape: [B*S]
+            loss = loss_fn(output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1))
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -228,9 +302,9 @@ def setup_trainer(
         metric = {"train_loss": loss.item()}
         engine.state.metrics = metric
 
-        return metric
+        return output_logits, tgt_output_label
 
-    trainer = Engine(train_one_epoch)
+    trainer = Engine(train_one_iter)
 
     for name, metric in metrics.items():
         metric.attach(trainer, name)
@@ -268,28 +342,30 @@ def setup_evaluator(
     # https://docs.pytorch.org/tutorials/recipes/recipes/amp_recipe.html#inference-evaluation
 
     @torch.no_grad()
-    def test_one_epoch(engine: Engine, batch: dict[str, torch.Tensor | str]):
+    def test_one_iter(engine: Engine, batch: dict[str, torch.Tensor | str]) -> tuple[torch.Tensor, torch.Tensor]:
+        # NOTE See train_one_iter function for code explanation
+
         src_sequence = batch["src"].to(device, non_blocking=True, dtype=torch.long)
         tgt_sequence = batch["tgt"].to(device, non_blocking=True, dtype=torch.long)
         src_mask = batch["src_mask"].to(device, non_blocking=True, dtype=torch.long)
         tgt_mask = batch["tgt_mask"].to(device, non_blocking=True, dtype=torch.long)
 
-        # Shifted target sequence as label for teacher forcing
-        tgt_output_label = tgt_sequence[:, 1:].reshape(-1)
+        tgt_output_label = tgt_sequence[:, 1:]
+
+        tgt_input_sequence = tgt_sequence[:, :-1]
 
         model.eval()
 
         with autocast(device.type, enabled=config.training_hp.use_amp):
-            output_logits = model(src_sequence, tgt_sequence, src_mask, tgt_mask)
-
-            loss = loss_fn(output_logits, tgt_output_label)
+            output_logits = model(src_sequence, tgt_input_sequence, src_mask, tgt_mask)
+            loss = loss_fn(output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1))
 
         metric = {"test_loss": loss.item()}
         engine.state.metrics = metric
 
-        return output_logits
+        return output_logits, tgt_output_label
 
-    evaluator = Engine(test_one_epoch)
+    evaluator = Engine(test_one_iter)
 
     for name, metric in metrics.items():
         metric.attach(evaluator, name)
