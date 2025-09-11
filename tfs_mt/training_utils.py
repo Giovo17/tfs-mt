@@ -48,7 +48,6 @@ def resume_from(
     checkpoint_filepath: str,
     logger: Logger,
     strict: bool = True,
-    model_dir: str | None = None,
 ) -> None:
     """Loads state dict from a checkpoint file to resume the training.
 
@@ -57,7 +56,6 @@ def resume_from(
         checkpoint_filepath (str): Path to the checkpoint file.
         logger (Logger): To log info about resuming from a checkpoint.
         strict (bool, optional): Whether to strictly enforce that the keys in `state_dict` match the keys returned by this module's `state_dict()` function. Defaults to True.
-        model_dir (str | None, optional): Directory in which to save the object. Defaults to None.
 
     Raises:
         CheckpointNotFoundError: Raised when checkpoint file doesn't exist.
@@ -108,7 +106,12 @@ def setup_logging(config: DictConfig | ListConfig) -> Logger:
     return logger
 
 
-def setup_exp_logging(config, trainer, optimizers, evaluators) -> WandBLogger:
+def setup_exp_logging(
+    config: DictConfig | ListConfig,
+    trainer: Engine,
+    optimizers: Optimizer | dict[str, Optimizer],
+    evaluators: Engine | dict[str, Engine],
+) -> WandBLogger:
     """Setup Experiment Tracking WandB logger from Ignite.
 
     Using common.setup_wandb_logging which setup an ignite's Engine compatible WandB logger.
@@ -190,14 +193,14 @@ def setup_handlers(
 def nlp_metric_transform(
     output: tuple[torch.Tensor, torch.Tensor], tgt_tokenizer: WordTokenizer
 ) -> tuple[list[list[str]], list[list[list[str]]]]:
-    """Transform `train_one_iter` output to be compliant with ignite nlp metrics.
+    """Transform `eval_one_iter` output to be compliant with ignite nlp metrics.
 
     References:
     1. Bleu documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Bleu.html)]
     2. Rouge documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Rouge.html)]
 
     Args:
-        output (tuple[torch.Tensor, torch.Tensor]): Output of `train_one_iter`.
+        output (tuple[torch.Tensor, torch.Tensor]): Output of `eval_one_iter`.
         tgt_tokenizer (WordTokenizer): Target tokenizer used to decode tokens.
 
     Returns:
@@ -227,10 +230,10 @@ def nlp_metric_transform(
 
 
 def loss_metric_transform(output: tuple[torch.Tensor, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Transform `train_one_iter` output to be compliant with torch loss computation.
+    """Transform `eval_one_iter` output to be compliant with torch loss computation.
 
     Args:
-        output (tuple[torch.Tensor, torch.Tensor]): Output of `train_one_iter`.
+        output (tuple[torch.Tensor, torch.Tensor]): Output of `eval_one_iter`.
 
     Returns:
         tuple[torch.Tensor, torch.Tensor]: Loss compatible output.
@@ -245,7 +248,6 @@ def setup_trainer(
     model: nn.Module,
     optimizer: Optimizer,
     loss_fn: nn.Module,
-    metrics: dict[str, Metric],
     device: str | torch.device,
     train_sampler: Sampler,
 ) -> Engine | DeterministicEngine:
@@ -256,7 +258,6 @@ def setup_trainer(
         model (nn.Module): Transformer model.
         optimizer (Optimizer): Optimizer.
         loss_fn (nn.Module): Loss function.
-        metrics (dict[str, Metric]): Metrics to be used.
         device (str | torch.device): Device.
         train_sampler (Sampler): Torch data sampler. Use for multigpu training.
 
@@ -285,6 +286,8 @@ def setup_trainer(
 
         model.train()
 
+        optimizer.zero_grad()
+
         # Mixed precision training if enabled in config. Reference: https://docs.pytorch.org/tutorials/recipes/recipes/amp_recipe.html
         # autocast will automatically manage which operations to run in FP16 and which ones to run in FP32.
         # eg. matmul will cast to FP16 and it's a crucial part of the whole pipeline.
@@ -295,7 +298,6 @@ def setup_trainer(
             # tgt_output_label shape: [B*S]
             loss = loss_fn(output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1))
 
-        optimizer.zero_grad()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -303,12 +305,9 @@ def setup_trainer(
         metric = {"train_loss": loss.item()}
         engine.state.metrics = metric
 
-        return output_logits, tgt_output_label
+        return metric
 
     trainer = Engine(train_one_iter)
-
-    for name, metric in metrics.items():
-        metric.attach(trainer, name)
 
     # Set epoch for distributed sampler
     @trainer.on(Events.EPOCH_STARTED)
@@ -325,25 +324,24 @@ def setup_evaluator(
     loss_fn: nn.Module,
     metrics: dict[str, Metric],
     device: str | torch.device,
-) -> Engine | DeterministicEngine:
+) -> tuple[Engine | DeterministicEngine, Engine | DeterministicEngine]:
     """Setup an evaluator with mixed precision training support.
 
     Args:
         config (DictConfig | ListConfig): Project config file.
         model (nn.Module): Transformer model.
-        loss_fn (nn.Module): Loss function.
         metrics (dict[str, Metric]): Metrics to be used.
         device (str | torch.device): Device.
 
     Returns:
-        Engine | DeterministicEngine: Evaluator object.
+        tuple[Engine | DeterministicEngine, Engine | DeterministicEngine]: Evaluator objects.
     """
 
     # Gradient scaler is not required during evaluation.
     # https://docs.pytorch.org/tutorials/recipes/recipes/amp_recipe.html#inference-evaluation
 
     @torch.no_grad()
-    def test_one_iter(engine: Engine, batch: dict[str, torch.Tensor | str]) -> tuple[torch.Tensor, torch.Tensor]:
+    def eval_one_iter(engine: Engine, batch: dict[str, torch.Tensor | str]) -> tuple[torch.Tensor, torch.Tensor]:
         # NOTE See train_one_iter function for code explanation
 
         src_sequence = batch["src"].to(device, non_blocking=True, dtype=torch.long)
@@ -359,16 +357,15 @@ def setup_evaluator(
 
         with autocast(device.type, enabled=config.training_hp.use_amp):
             output_logits = model(src_sequence, tgt_input_sequence, src_mask, tgt_mask)
-            loss = loss_fn(output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1))
-
-        metric = {"test_loss": loss.item()}
-        engine.state.metrics = metric
 
         return output_logits, tgt_output_label
 
-    evaluator = Engine(test_one_iter)
+    train_evaluator = Engine(eval_one_iter)
+    test_evaluator = Engine(eval_one_iter)
 
     for name, metric in metrics.items():
-        metric.attach(evaluator, name)
+        metric.attach(train_evaluator, name)
+    for name, metric in metrics.items():
+        metric.attach(test_evaluator, name)
 
-    return evaluator
+    return train_evaluator, test_evaluator
