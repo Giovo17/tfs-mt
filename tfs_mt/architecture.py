@@ -42,9 +42,10 @@ class MultiHeadAttention(nn.Module):
     Args:
         d_model (int): Model dimension.
         num_heads (int): Number of attention heads.
+        dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
     """
 
-    def __init__(self, d_model: int, num_heads: int):
+    def __init__(self, d_model: int, num_heads: int, dropout_prob: float = 0.1):
         super().__init__()
 
         self.d_model = d_model
@@ -78,6 +79,8 @@ class MultiHeadAttention(nn.Module):
         self.W_K = nn.Linear(d_model, num_heads * self.d_head, bias=False)
         self.W_V = nn.Linear(d_model, num_heads * self.d_head, bias=False)
         self.W_O = nn.Linear(num_heads * self.d_head, d_model, bias=False)  # Output projection
+
+        self.dropout = nn.Dropout(dropout_prob)
 
         self.scaling_factor = math.sqrt(self.d_head)  # To avoid computing it every time attention method is called
 
@@ -165,16 +168,21 @@ class MultiHeadAttention(nn.Module):
         # Applying the softmax on last dim makes results in a QKt matrix with normalized rows
         QKt_norm = torch.softmax(QKt, dim=-1)
 
+        QKt_norm = self.dropout(QKt_norm)
+
+        # Fix nan propagation due to softmax processing of masked matrix containing entire rows full of -inf
+        QKt_norm = QKt_norm.masked_fill(torch.isnan(QKt_norm), 0.0)
+
         return torch.matmul(QKt_norm, value)
 
 
 class FeedForward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
+    def __init__(self, d_model: int, d_ff: int, dropout_prob: float = 0.1):
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout_prob),
             nn.Linear(d_ff, d_model),
         )
 
@@ -216,7 +224,7 @@ class EncoderBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
         super().__init__()
 
-        self.self_attention = MultiHeadAttention(d_model, num_heads)
+        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
         self.feedforward = FeedForward(d_model, d_ff, dropout_prob)
         self.layer_norm1 = LayerNorm(d_model)
         self.layer_norm2 = LayerNorm(d_model)
@@ -252,8 +260,8 @@ class DecoderBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
         super().__init__()
 
-        self.self_attention = MultiHeadAttention(d_model, num_heads)
-        self.cross_attention = MultiHeadAttention(d_model, num_heads)
+        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
+        self.cross_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
         self.feedforward = FeedForward(d_model, d_ff, dropout_prob)
         self.layer_norm1 = LayerNorm(d_model)
         self.layer_norm2 = LayerNorm(d_model)
@@ -261,11 +269,15 @@ class DecoderBlock(nn.Module):
         self.dropout = nn.Dropout(dropout_prob)
 
     def forward(
-        self, x: torch.Tensor, encoder_representation: torch.Tensor, tgt_mask: torch.BoolTensor, src_mask
+        self,
+        x: torch.Tensor,
+        encoder_representation: torch.Tensor,
+        tgt_mask: torch.BoolTensor,
+        src_mask: torch.BoolTensor,
     ) -> torch.Tensor:
         t1 = self.layer_norm1(x)
         t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=tgt_mask)
-        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attentio is all you need page 8)
+        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
         t2 = self.dropout(t2)
         t3 = t2 + x
 
