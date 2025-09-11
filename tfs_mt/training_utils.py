@@ -145,32 +145,33 @@ def setup_handlers(
 
     ckpt_handler_train = ckpt_handler_test = None
 
-    # Checkpointing
-    saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
-    ckpt_handler_train = Checkpoint(
-        to_save_train,
-        saver,
-        filename_prefix=config.model_base_name,
-        n_saved=config.checkpoints_retain_n,
-    )
-    trainer.add_event_handler(
-        Events.ITERATION_COMPLETED(every=config.save_every_iters),
-        ckpt_handler_train,
-    )
+    if idist.get_rank() == 0:  # Setup checkpointing only on rank 0
+        # Checkpointing
+        saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
+        ckpt_handler_train = Checkpoint(
+            to_save_train,
+            saver,
+            filename_prefix=config.model_base_name,
+            n_saved=config.checkpoints_retain_n,
+        )
+        trainer.add_event_handler(
+            Events.ITERATION_COMPLETED(every=config.save_every_iters),
+            ckpt_handler_train,
+        )
 
-    global_step_transform = None
-    if to_save_train.get("trainer", None) is not None:
-        global_step_transform = global_step_from_engine(to_save_train["trainer"])
-    ckpt_handler_test = Checkpoint(
-        to_save_test,
-        saver,
-        filename_prefix="best",
-        n_saved=config.checkpoints_retain_n,
-        global_step_transform=global_step_transform,
-        score_name="test_bleu",
-        score_function=Checkpoint.get_default_score_fn("Bleu"),
-    )
-    evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test)
+        global_step_transform = None
+        if to_save_train.get("trainer", None) is not None:
+            global_step_transform = global_step_from_engine(to_save_train["trainer"])
+        ckpt_handler_test = Checkpoint(
+            to_save_test,
+            saver,
+            filename_prefix="best",
+            n_saved=config.checkpoints_retain_n,
+            global_step_transform=global_step_transform,
+            score_name="test_bleu",
+            score_function=Checkpoint.get_default_score_fn("Bleu"),
+        )
+        evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test)
 
     # Early stopping
     def score_fn(engine: Engine):

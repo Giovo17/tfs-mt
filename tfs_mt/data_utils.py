@@ -688,6 +688,9 @@ def build_data_utils(
         max_sequence_length=config.model_parameters.tokenizer_max_len,
     )
 
+    print(f"Train dataset length: {len(train_dataset)}")
+    print(f"Test dataset length: {len(test_dataset)}")
+
     if config.training_hp.distributed_training and local_rank == 0:
         idist.barrier()
 
@@ -703,6 +706,7 @@ def build_data_utils(
         ),
         shuffle=config.train_dataloader.shuffle,
         drop_last=config.train_dataloader.drop_last,
+        persistent_workers=True,  # If True, the data loader will not shut down the worker processes after a dataset has been consumed once. This allows to maintain the workers Dataset instances alive
     )
     test_dataloader = idist.auto_dataloader(
         test_dataset,
@@ -715,7 +719,11 @@ def build_data_utils(
         ),
         shuffle=config.test_dataloader.shuffle,
         drop_last=config.test_dataloader.drop_last,
+        persistent_workers=True,
     )
+
+    print(f"Train dataloader length: {len(train_dataloader)}")
+    print(f"Test dataloader length: {len(test_dataloader)}")
 
     if return_all:
         return train_dataloader, test_dataloader, train_dataset, test_dataset, src_tokenizer, tgt_tokenizer
