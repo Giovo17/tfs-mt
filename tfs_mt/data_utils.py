@@ -58,12 +58,48 @@ def parse_glove_tokens(lines: list[str]) -> list[str]:
     return result
 
 
+def download_glove(output_dir: str, glove_version: str = "glove.2024.wikigiga.50d") -> str:
+    """Download GloVe embeddings and returns the filepath."""
+    glove_folder_path = output_dir + f"/{glove_version}"
+    os.makedirs(glove_folder_path, exist_ok=True)
+
+    url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
+    zip_path = output_dir + f"/{glove_version}.zip"
+
+    glove_filepath = None
+    for file in os.listdir(glove_folder_path):
+        if file.endswith(".txt"):
+            glove_filepath = os.path.join(glove_folder_path, file)
+            break
+
+    if glove_filepath is None:
+        print(f"GloVe not found in {glove_folder_path}. Downloading GloVe ({glove_version})...")
+
+        response = requests.get(url, stream=True, timeout=600)
+        response.raise_for_status()
+
+        with open(zip_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(glove_folder_path)
+        os.remove(zip_path)
+
+        for file in os.listdir(glove_folder_path):
+            if file.endswith(".txt"):
+                glove_filepath = os.path.join(glove_folder_path, file)
+                break
+
+    return glove_filepath
+
+
 class WordTokenizer:
     """Word tokenizer.
     Mainly used to let the model be compatible with pretrained GloVe embeddings.
 
     Args:
-        special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. BOS_TOKEN, EOS_TOKEN.
+        special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. SOS_TOKEN, EOS_TOKEN.
         contractions (dict[str, str] | None, optional): Contractions to be considered, eg. 's, 'll . Defaults to None.
         num_workers (int, optional): Number of CPU threads to use in parallel operations, eg. token counting or GloVe token extraction. Defaults to 4.
         tokenizer_max_len (int, optional): Tokenizer max sequence length. Mainly used to limit memory usage and performance impact during training and inference due to attention quadratic complexity. Defaults to 128.
@@ -175,9 +211,8 @@ class WordTokenizer:
         """
         vocab = []
         vocab.extend(self.special_tokens.values())
-        vocab_set = set(
-            vocab
-        )  # Used for quick O(1) insertion of new tokens, instead of searching in the vocab list for each new token (O(n))
+        # Used for quick O(1) insertion of new tokens, instead of searching in the vocab list for each new token (O(n))
+        vocab_set = set(vocab)
 
         if min_freq > 1:
             # Split tokens in chunks and assign them to CPU thread for parallel counting
@@ -209,39 +244,11 @@ class WordTokenizer:
                 raise GloVeVersionError(glove_version, self.glove_available_versions)
 
             data_path = os.getcwd() + "/data" if "data_path" not in kwargs else kwargs["data_path"]
-            glove_folder_path = data_path + f"/{glove_version}"
-            os.makedirs(glove_folder_path, exist_ok=True)
-
-            url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
-            zip_path = data_path + f"/{glove_version}.zip"
 
             glove_tokens = []
 
             try:
-                glove_filepath = None
-                for file in os.listdir(glove_folder_path):
-                    if file.endswith(".txt"):
-                        glove_filepath = os.path.join(glove_folder_path, file)
-                        break
-
-                if glove_filepath is None:
-                    print(f"GloVe not found in {glove_folder_path}. Downloading...")
-
-                    response = requests.get(url, stream=True, timeout=600)
-                    response.raise_for_status()
-
-                    with open(zip_path, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-
-                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                        zip_ref.extractall(glove_folder_path)
-                    os.remove(zip_path)
-
-                    for file in os.listdir(glove_folder_path):
-                        if file.endswith(".txt"):
-                            glove_filepath = os.path.join(glove_folder_path, file)
-                            break
+                glove_filepath = download_glove(data_path, glove_version)
 
                 print(f"Loading GloVe {glove_version} embeddings in parallel...")
 
@@ -262,8 +269,6 @@ class WordTokenizer:
                 vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
-
-                os.remove(glove_filepath)
 
             except Exception as e:
                 print(f"Error with GloVe processing: {e}")
@@ -318,38 +323,11 @@ class WordTokenizer:
                 raise GloVeVersionError(glove_version, self.glove_available_versions)
 
             data_path = os.getcwd() + "/data" if "data_path" not in kwargs else kwargs["data_path"]
-            glove_folder_path = data_path + f"/{glove_version}"
-            os.makedirs(glove_folder_path, exist_ok=True)
-
-            url = f"https://nlp.stanford.edu/data/wordvecs/{glove_version}.zip"
-            zip_path = data_path + f"/{glove_version}.zip"
 
             glove_tokens = []
 
             try:
-                glove_filepath = None
-                for file in os.listdir(glove_folder_path):
-                    if file.endswith(".txt"):
-                        glove_filepath = os.path.join(glove_folder_path, file)
-                        break
-
-                if glove_filepath is None:
-                    print(f"GloVe not found in {glove_folder_path}. Downloading GloVe ({glove_version})...")
-
-                    response = requests.get(url, stream=True, timeout=600)
-                    response.raise_for_status()
-
-                    with open(zip_path, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-
-                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                        zip_ref.extractall(glove_folder_path)
-
-                    for file in os.listdir(glove_folder_path):
-                        if file.endswith(".txt"):
-                            glove_filepath = os.path.join(glove_folder_path, file)
-                            break
+                glove_filepath = download_glove(data_path, glove_version)
 
                 print(f"Loading GloVe {glove_version} tokens from file...")
 
@@ -363,8 +341,6 @@ class WordTokenizer:
                 vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
-
-                os.remove(glove_filepath)
 
             except Exception as e:
                 print(f"Error with GloVe processing GloVe: {e}")
@@ -539,13 +515,13 @@ class TranslationDataset(Dataset):
 
         # Tokenize texts
         src_tokens, src_mask = self.src_tokenizer.encode(src_text_tokenized, pad_to_len=max_seq_len)
-        tgt_tokens, src_mask = self.tgt_tokenizer.encode(tgt_text_tokenized, pad_to_len=max_seq_len)
+        tgt_tokens, tgt_mask = self.tgt_tokenizer.encode(tgt_text_tokenized, pad_to_len=max_seq_len)
 
         return {
             "src": torch.tensor(src_tokens, dtype=torch.long),
             "tgt": torch.tensor(tgt_tokens, dtype=torch.long),
             "src_mask": torch.tensor(src_mask, dtype=torch.bool),
-            "tgt_mask": torch.tensor(src_mask, dtype=torch.bool),
+            "tgt_mask": torch.tensor(tgt_mask, dtype=torch.bool),
             "src_text": src_text,
             "tgt_text": tgt_text,
         }
