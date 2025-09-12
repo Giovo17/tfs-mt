@@ -236,6 +236,7 @@ class WordTokenizer:
 
                     with zipfile.ZipFile(zip_path, "r") as zip_ref:
                         zip_ref.extractall(glove_folder_path)
+                    os.remove(zip_path)
 
                     for file in os.listdir(glove_folder_path):
                         if file.endswith(".txt"):
@@ -261,6 +262,8 @@ class WordTokenizer:
                 vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
+
+                os.remove(glove_filepath)
 
             except Exception as e:
                 print(f"Error with GloVe processing: {e}")
@@ -352,15 +355,16 @@ class WordTokenizer:
 
                 with open(glove_filepath, encoding="utf-8") as f:
                     lines = f.readlines()
-                glove_tokens = parse_glove_tokens(
-                    lines
-                )  # Using parse_glove_tokens function in order to avoid code duplication
+                # Using parse_glove_tokens function in order to avoid code duplication
+                glove_tokens = parse_glove_tokens(lines)
 
                 initial_size = len(vocab)
                 vocab.extend(glove_tokens)
                 vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
+
+                os.remove(glove_filepath)
 
             except Exception as e:
                 print(f"Error with GloVe processing GloVe: {e}")
