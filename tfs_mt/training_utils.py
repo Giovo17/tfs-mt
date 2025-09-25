@@ -1,6 +1,8 @@
 import logging
 import os
+import tempfile
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import datetime
 from logging import Logger
 
@@ -18,16 +20,28 @@ from omegaconf import OmegaConf
 from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
 from torch import nn
-from torch.amp import GradScaler, autocast
+from torch.amp import autocast
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DistributedSampler, Sampler
 
 from .data_utils import WordTokenizer
+from .ignite_custom_utils import S3Saver
 
 
 class CheckpointNotFoundError(Exception):
     def __init__(self, checkpoint_filepath):
         msg = f"Given {checkpoint_filepath!s} does not exist."
+        super().__init__(msg)
+
+
+class InvalidCheckpointS3PathError(Exception):
+    def __init__(self, msg="checkpoint_s3_path must be of form s3://bucket/key"):
+        super().__init__(msg)
+
+
+class S3FailedDownloadError(Exception):
+    def __init__(self, checkpoint_filepath, e):
+        msg = f"Failed to download checkpoint from S3 ({checkpoint_filepath!s}): {e!s}"
         super().__init__(msg)
 
 
@@ -43,29 +57,64 @@ def log_metrics(engine: Engine, tag: str) -> None:
     engine.logger.info(metrics_format)
 
 
-def resume_from(
+def resume_from_ckpt(
     to_load: Mapping,
     checkpoint_filepath: str,
+    device: torch.device,
     logger: Logger,
     strict: bool = True,
 ) -> None:
     """Loads state dict from a checkpoint file to resume the training.
+    It supports loading from local or bucket s3 checkpoint.
 
     Args:
-        to_load (Mapping): A dictionary with objects, e.g. {“model”: model, “optimizer”: optimizer, ...}
-        checkpoint_filepath (str): Path to the checkpoint file.
+        to_load (Mapping): A dictionary with objects.
+        checkpoint_filepath (str): Path to the checkpoint file in S3 bucket or in filesystem.
+        device (torch.device): Device.
         logger (Logger): To log info about resuming from a checkpoint.
         strict (bool, optional): Whether to strictly enforce that the keys in `state_dict` match the keys returned by this module's `state_dict()` function. Defaults to True.
 
     Raises:
         CheckpointNotFoundError: Raised when checkpoint file doesn't exist.
     """
-    if not os.path.isfile(checkpoint_filepath):
-        raise CheckpointNotFoundError(checkpoint_filepath)
-    checkpoint = torch.load(checkpoint_filepath, map_location="cpu")
 
-    Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
-    logger.info("Successfully resumed from a checkpoint: %s", checkpoint_filepath)
+    resume_method = "local"
+    if checkpoint_filepath.startswith("s3://"):
+        resume_method = "bucket-s3"
+
+    if resume_method == "local":
+        if not os.path.isfile(checkpoint_filepath):
+            raise CheckpointNotFoundError(checkpoint_filepath)
+
+        checkpoint = torch.load(checkpoint_filepath, map_location="cpu")
+
+        Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
+        logger.info("Successfully resumed from a local checkpoint: %s", checkpoint_filepath)
+
+    else:  # resume_method == "bucket-s3":
+        _, _, path = checkpoint_filepath.partition("s3://")
+        bucket, _, key = path.partition("/")
+
+        if bucket == "" or key == "":
+            raise InvalidCheckpointS3PathError()
+
+        s3 = S3Saver._make_s3_client()
+
+        # Download to a temporary file
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            try:
+                s3.download_file(bucket, key, tmp_path)
+            except Exception as e:
+                raise S3FailedDownloadError(checkpoint_filepath, e) from e
+            checkpoint = torch.load(tmp_path, map_location=device)
+
+            Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
+            logger.info("Successfully resumed from a bucket s3 checkpoint: %s", checkpoint_filepath)
+        finally:
+            with suppress(OSError):
+                os.remove(tmp_path)
 
 
 def setup_output_dir(config: DictConfig | ListConfig, rank: int) -> str:
@@ -149,8 +198,14 @@ def setup_handlers(
     ckpt_handler_train = ckpt_handler_test = None
 
     if idist.get_rank() == 0:  # Setup checkpointing only on rank 0
-        # Checkpointing
+        # Setup checkpoints savers
         saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
+        s3_saver = S3Saver(
+            bucket=f"{config.s3_bucket_name}",
+            prefix=f"{config.model_name}/",
+        )
+
+        # Local checkpointing during training
         ckpt_handler_train = Checkpoint(
             to_save_train,
             saver,
@@ -162,6 +217,7 @@ def setup_handlers(
             ckpt_handler_train,
         )
 
+        # Local checkpointing during evaluation
         global_step_transform = None
         if to_save_train.get("trainer", None) is not None:
             global_step_transform = global_step_from_engine(to_save_train["trainer"])
@@ -175,6 +231,18 @@ def setup_handlers(
             score_function=Checkpoint.get_default_score_fn("Bleu"),
         )
         evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test)
+
+        # Offsite checkpointing after training completes
+        ckpt_handler_test_s3 = Checkpoint(
+            to_save_test,
+            s3_saver,
+            filename_prefix="best",
+            n_saved=1,
+            global_step_transform=global_step_transform,
+            score_name="test_bleu",
+            score_function=Checkpoint.get_default_score_fn("Bleu"),
+        )
+        evaluator.add_event_handler(Events.COMPLETED, ckpt_handler_test_s3)
 
     # Early stopping
     def score_fn(engine: Engine):
@@ -248,7 +316,7 @@ def setup_trainer(
     model: nn.Module,
     optimizer: Optimizer,
     loss_fn: nn.Module,
-    device: str | torch.device,
+    device: torch.device,
     train_sampler: Sampler,
 ) -> Engine | DeterministicEngine:
     """Setup a trainer with multigpu and mixed precision training support.
@@ -258,16 +326,17 @@ def setup_trainer(
         model (nn.Module): Transformer model.
         optimizer (Optimizer): Optimizer.
         loss_fn (nn.Module): Loss function.
-        device (str | torch.device): Device.
+        device (torch.device): Device.
         train_sampler (Sampler): Torch data sampler. Use for multigpu training.
 
     Returns:
         Engine | DeterministicEngine: Trainer object.
     """
 
-    # Gradient scaler for mixed precision training.
+    # Gradient scaler for mixed precision training. Not required for bfloat16 training, cause it has the same range of float32.
     # It helps prevent gradients with small magnitudes from underflowing when training with mixed precision.
-    scaler = GradScaler(device, enabled=config.training_hp.use_amp)
+    # scaler = GradScaler(device, enabled=config.training_hp.use_amp)
+    scaler = None
 
     def train_one_iter(
         engine: Engine | DeterministicEngine, batch: dict[str, torch.Tensor | str]
@@ -284,6 +353,12 @@ def setup_trainer(
 
         tgt_input_sequence = tgt_sequence[:, :-1]
 
+        # Count how many tokens encoder and decoder see during training, excluding SOS and EOS tokens
+        num_src_tokens = src_mask.to(torch.int8).sum().item() - 2 * src_mask.size(0)
+        num_tgt_tokens = tgt_mask.to(torch.int8).sum().item() - 2 * tgt_mask.size(0)
+        engine.state.tokens_seen_src = getattr(engine.state, "tokens_seen_src", 0) + num_src_tokens
+        engine.state.tokens_seen_tgt = getattr(engine.state, "tokens_seen_tgt", 0) + num_tgt_tokens
+
         model.train()
 
         optimizer.zero_grad()
@@ -292,17 +367,25 @@ def setup_trainer(
         # autocast will automatically manage which operations to run in FP16 and which ones to run in FP32.
         # eg. matmul will cast to FP16 and it's a crucial part of the whole pipeline.
         # Here the complete list of FP16 supported modules: https://docs.pytorch.org/docs/stable/amp.html#cuda-ops-that-can-autocast-to-float16
-        with autocast(device.type, dtype=torch.float16, enabled=config.training_hp.use_amp):
+        # NOTE Switching to torch.bfloat16 for better accuracy and same efficiency of float16, more on this here: https://www.cerebras.ai/blog/to-bfloat-or-not-to-bfloat-that-is-the-question
+        with autocast(device.type, dtype=torch.bfloat16, enabled=config.training_hp.use_amp):
             output_logits = model(src_sequence, tgt_input_sequence, src_mask, tgt_mask)
             # output_logits shape: [B*S, V]  (B: batch size, S: sequence length, V: vocabulary size)
             # tgt_output_label shape: [B*S]
             loss = loss_fn(output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1))
 
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
-        metric = {"train_loss": loss.item()}
+        metric = {
+            "train_loss": loss.item(),
+            "tokens_seen_src_cum": getattr(engine.state, "tokens_seen_src", 0),
+            "tokens_seen_tgt_cum": getattr(engine.state, "tokens_seen_tgt", 0),
+            "tokens_seen_tot_cum": getattr(engine.state, "tokens_seen_src", 0)
+            + getattr(engine.state, "tokens_seen_tgt", 0),
+        }
         engine.state.metrics = metric
 
         return metric
@@ -314,6 +397,9 @@ def setup_trainer(
     def set_epoch():
         if idist.get_world_size() > 1 and isinstance(train_sampler, DistributedSampler):
             train_sampler.set_epoch(trainer.state.epoch - 1)
+        # Initialize token seen during training counters
+        trainer.state.tokens_seen_src = 0
+        trainer.state.tokens_seen_tgt = 0
 
     return trainer
 
@@ -321,9 +407,8 @@ def setup_trainer(
 def setup_evaluator(
     config: DictConfig | ListConfig,
     model: nn.Module,
-    loss_fn: nn.Module,
     metrics: dict[str, Metric],
-    device: str | torch.device,
+    device: torch.device,
 ) -> tuple[Engine | DeterministicEngine, Engine | DeterministicEngine]:
     """Setup an evaluator with mixed precision training support.
 
@@ -331,7 +416,7 @@ def setup_evaluator(
         config (DictConfig | ListConfig): Project config file.
         model (nn.Module): Transformer model.
         metrics (dict[str, Metric]): Metrics to be used.
-        device (str | torch.device): Device.
+        device (torch.device): Device.
 
     Returns:
         tuple[Engine | DeterministicEngine, Engine | DeterministicEngine]: Evaluator objects.
@@ -355,7 +440,7 @@ def setup_evaluator(
 
         model.eval()
 
-        with autocast(device.type, enabled=config.training_hp.use_amp):
+        with autocast(device.type, dtype=torch.bfloat16, enabled=config.training_hp.use_amp):
             output_logits = model(src_sequence, tgt_input_sequence, src_mask, tgt_mask)
 
         return output_logits, tgt_output_label
