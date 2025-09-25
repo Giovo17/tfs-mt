@@ -2,13 +2,13 @@
 install:
 	@echo "Creating virtual environment"
 	@uv sync
-	@uv run pre-commit install
+	@uv run prek install
 
 .PHONY: check
 check:
 	@echo "Checks"
 	@uv lock --locked
-	@uv run pre-commit run -a
+	@uv run prek run -a
 	@uv run mypy
 
 .PHONY: test
