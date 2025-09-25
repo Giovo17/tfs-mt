@@ -1,9 +1,13 @@
 seed: 42
 
-log_every_iters: 2_000
+log_every_iters: 1_000
 save_every_iters: 20_000
 checkpoints_retain_n: 5
 time_limit_sec: -1
+s3_bucket_name: tfs-mt-checkpoints
+
+# If null training will start from scratch
+ckpt_path_to_resume_from: null  #s3://bucket-name/path/to/checkpoint.pt or filesystem path
 
 wandb_organization: giovoteam
 
@@ -43,7 +47,7 @@ model_configs:
 
 
 training_hp:
-  num_epochs: 2
+  num_epochs: 5
   num_warmup_epochs: 1
   load_checkpoint:
     load_full_checkpoint: False
