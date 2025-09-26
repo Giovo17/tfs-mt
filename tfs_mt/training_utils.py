@@ -10,7 +10,7 @@ import ignite.distributed as idist
 import torch
 from ignite.contrib.engines import common
 from ignite.engine import DeterministicEngine, Engine, Events
-from ignite.handlers import Checkpoint, DiskSaver, global_step_from_engine
+from ignite.handlers import Checkpoint, DiskSaver, ProgressBar, global_step_from_engine
 from ignite.handlers.early_stopping import EarlyStopping
 from ignite.handlers.time_limit import TimeLimit
 from ignite.handlers.wandb_logger import WandBLogger
@@ -253,7 +253,22 @@ def setup_handlers(
 
     # Time limit reached policy to stop training. Mainly used in Kaggle due to 12 hours run limit.
     if config.time_limit_sec != -1:
+        print(f"Setting up training time limit to {int(config.time_limit_sec) / 3600} hours.")
         trainer.add_event_handler(Events.ITERATION_COMPLETED, TimeLimit(config.time_limit_sec))
+
+    # Iterations and epochs progress bars
+    ProgressBar(persist=False).attach(
+        trainer, metric_names="all", event_name=Events.ITERATION_COMPLETED(every=config.update_pbar_every_iters)
+    )
+    ProgressBar(persist=True, bar_format="").attach(
+        trainer, event_name=Events.EPOCH_STARTED, closing_event_name=Events.COMPLETED
+    )
+    ProgressBar(persist=False).attach(
+        evaluator, metric_names="all", event_name=Events.ITERATION_COMPLETED(every=config.update_pbar_every_iters)
+    )
+    ProgressBar(persist=True, bar_format="").attach(
+        evaluator, event_name=Events.EPOCH_STARTED, closing_event_name=Events.COMPLETED
+    )
 
     return ckpt_handler_train, ckpt_handler_test
 
