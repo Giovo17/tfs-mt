@@ -55,6 +55,7 @@ dev = [
     "python-dotenv>=1.1.1",
     "nbformat>=5.10.4",
     "boto3>=1.40.36",
+    "pynvml<12",
 ]
 
 [build-system]
