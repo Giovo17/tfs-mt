@@ -1,8 +1,9 @@
 seed: 42
 
-log_every_iters: 1_000
-save_every_iters: 20_000
-checkpoints_retain_n: 5
+log_every_iters: 2_000
+save_every_iters: 20_000  # Only used for training, testing checkpoints will be saved whenever each epoch ends.
+update_pbar_every_iters: 100
+checkpoints_retain_n: 5  # The number of checkpoints that will be saved are double the specified number, one half will come from training and the other from testing
 time_limit_sec: -1
 s3_bucket_name: tfs-mt-checkpoints
 
@@ -15,7 +16,6 @@ model_base_name: tfs_mt
 
 model_parameters:
   dropout: 0.1
-  tokenizer_max_len: 128
 
 model_configs:
   pretrained_word_embeddings: "GloVe"
@@ -47,7 +47,7 @@ model_configs:
 
 
 training_hp:
-  num_epochs: 5
+  num_epochs: 2
   num_warmup_epochs: 1
   load_checkpoint:
     load_full_checkpoint: False
@@ -69,6 +69,16 @@ training_hp:
     beta2: 0.999
     eps: 1e-8
 
+tokenizer:
+  sos_token: "<s>"
+  eos_token: "</s>"
+  pad_token: "<PAD>"
+  unk_token: "<UNK>"
+  max_seq_len: 128
+  max_vocab_size: 60_000
+  vocab_min_freq: 2
+  num_workers: 4
+
 dataset:
   dataset_task: machine-translation
   dataset_id: "Helsinki-NLP/europarl"
@@ -76,21 +86,16 @@ dataset:
   train_split: 0.8
   src_lang: "en"
   tgt_lang: "it"
-  sos_token: "<s>"
-  eos_token: "</s>"
-  pad_token: "<PAD>"
-  unk_token: "<UNK>"
-  vocab_min_freq: 2
   max_len: -1
 
 train_dataloader:
-  batch_size: 32
-  num_workers: 4
+  batch_size: 64
+  num_workers: 16
   shuffle: True
   drop_last: True
 
 test_dataloader:
-  batch_size: 32
-  num_workers: 4
+  batch_size: 64
+  num_workers: 16
   shuffle: False
   drop_last: False
