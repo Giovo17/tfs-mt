@@ -103,6 +103,7 @@ class WordTokenizer:
         contractions (dict[str, str] | None, optional): Contractions to be considered, eg. 's, 'll . Defaults to None.
         num_workers (int, optional): Number of CPU threads to use in parallel operations, eg. token counting or GloVe token extraction. Defaults to 4.
         tokenizer_max_len (int, optional): Tokenizer max sequence length. Mainly used to limit memory usage and performance impact during training and inference due to attention quadratic complexity. Defaults to 128.
+        max_vocab_size (int, optional): Maximum number of token in vocabulary. Defaults to 100_000.
     """
 
     def __init__(
@@ -111,6 +112,7 @@ class WordTokenizer:
         contractions: dict[str, str] | None = None,
         num_workers: int = 4,
         tokenizer_max_len: int = 128,
+        max_vocab_size: int = 100_000,
     ):
         self.vocab: list[str] = []
         self.token_to_idx: dict[str, int] = {}
@@ -118,6 +120,7 @@ class WordTokenizer:
 
         self.num_workers = num_workers
         self.tokenizer_max_len = tokenizer_max_len
+        self.max_vocab_size = max_vocab_size
 
         self.special_tokens = special_tokens
 
@@ -225,11 +228,15 @@ class WordTokenizer:
                 token_counts.update(c)
 
             for token, count in token_counts.items():
-                if count >= min_freq:
+                # len(vocab_set) is O(1) operation cause the length is stored as a set attribute
+                if (count >= min_freq and self.max_vocab_size == -1) or (
+                    count >= min_freq and self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size
+                ):
                     vocab_set.add(token.lower())
         else:
             for token in tokens:
-                vocab_set.add(token.lower())
+                if self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size):
+                    vocab_set.add(token.lower())
 
         vocab = list(vocab_set)
         del vocab_set
@@ -237,7 +244,9 @@ class WordTokenizer:
         glove_tokens = []
 
         # Parallel GloVe loading
-        if extend_with_glove:
+        if extend_with_glove and (
+            self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab) < self.max_vocab_size)
+        ):
             print("Extending vocab with GloVe tokens using parallel processing...")
 
             if glove_version not in self.glove_available_versions:
@@ -267,6 +276,8 @@ class WordTokenizer:
                 initial_size = len(vocab)
                 vocab.extend(glove_tokens)
                 vocab = list(set(vocab))
+                if self.max_vocab_size != -1:
+                    vocab = vocab[: self.max_vocab_size]  # Cap to max_vocab_size
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
 
@@ -307,16 +318,22 @@ class WordTokenizer:
         if min_freq > 1:
             token_counts = Counter(tokens)
             for token, count in token_counts.items():
-                if count >= min_freq:
+                # len(vocab_set) is O(1) operation cause the length is stored as a set attribute
+                if (count >= min_freq and self.max_vocab_size == -1) or (
+                    count >= min_freq and self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size
+                ):
                     vocab_set.add(token.lower())
         else:
             for token in tokens:
-                vocab_set.add(token.lower())
+                if self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size):
+                    vocab_set.add(token.lower())
 
         vocab = list(vocab_set)
         del vocab_set
 
-        if extend_with_glove:
+        if extend_with_glove and (
+            self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab) < self.max_vocab_size)
+        ):
             print("Extending vocab with GloVe tokens...")
 
             if glove_version not in self.glove_available_versions:
@@ -339,6 +356,8 @@ class WordTokenizer:
                 initial_size = len(vocab)
                 vocab.extend(glove_tokens)
                 vocab = list(set(vocab))
+                if self.max_vocab_size != -1:
+                    vocab = vocab[: self.max_vocab_size]  # Cap to max_vocab_size
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
 
@@ -381,21 +400,14 @@ class WordTokenizer:
         if tokens[-1] != self.special_tokens["eos_token"]:
             tokens.append(self.special_tokens["eos_token"])
 
-        token_ids = [
-            self.token_to_idx[token]
-            if token in self.token_to_idx
-            else self.token_to_idx[self.special_tokens["unk_token"]]
-            for token in tokens
-        ]
+        token_ids = [self.token_to_idx.get(token, self.unk_token_idx) for token in tokens]
 
         if pad_to_len is not None:  # Pad sequence to pad_to_len
             pad_to_len += 2  # Considering SOS and EOS tokens
-            token_ids.extend([
-                self.token_to_idx[self.special_tokens["pad_token"]] for _ in range(pad_to_len - len(tokens))
-            ])
+            token_ids.extend([self.pad_token_idx for _ in range(pad_to_len - len(tokens))])
 
         # Disabling attention to pad tokens
-        mask = [token != self.token_to_idx[self.special_tokens["pad_token"]] for token in token_ids]
+        mask = [token != self.pad_token_idx for token in token_ids]
 
         return token_ids, mask
 
@@ -612,14 +624,24 @@ def build_data_utils(
 
     # Build tokenizers and vocabs. Both src and tgt tokenizers vocabs are built using the training data
     special_tokens = {
-        "sos_token": config.dataset.sos_token,
-        "eos_token": config.dataset.eos_token,
-        "pad_token": config.dataset.pad_token,
-        "unk_token": config.dataset.unk_token,
+        "sos_token": config.tokenizer.sos_token,
+        "eos_token": config.tokenizer.eos_token,
+        "pad_token": config.tokenizer.pad_token,
+        "unk_token": config.tokenizer.unk_token,
     }
 
-    src_tokenizer = WordTokenizer(special_tokens)
-    tgt_tokenizer = WordTokenizer(special_tokens)
+    src_tokenizer = WordTokenizer(
+        special_tokens,
+        num_workers=config.tokenizer.num_workers,
+        tokenizer_max_len=config.tokenizer.max_seq_len,
+        max_vocab_size=config.tokenizer.max_vocab_size,
+    )
+    tgt_tokenizer = WordTokenizer(
+        special_tokens,
+        num_workers=config.tokenizer.num_workers,
+        tokenizer_max_len=config.tokenizer.max_seq_len,
+        max_vocab_size=config.tokenizer.max_vocab_size,
+    )
 
     # To build the vocabularies texts are not filtered based on tokenizer.max_sequence_length
     src_tokens = [token for text in train_src_texts for token in src_tokenizer.tokenize(text)]
@@ -627,7 +649,7 @@ def build_data_utils(
 
     src_tokenizer.build_vocab_parallel(
         src_tokens,
-        min_freq=config.dataset.vocab_min_freq,
+        min_freq=config.tokenizer.vocab_min_freq,
         extend_with_glove=bool(
             src_lang == "en"
         ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
@@ -635,19 +657,21 @@ def build_data_utils(
     )
     tgt_tokenizer.build_vocab_parallel(
         tgt_tokens,
-        min_freq=config.dataset.vocab_min_freq,
+        min_freq=config.tokenizer.vocab_min_freq,
         extend_with_glove=bool(tgt_lang == "en"),
         glove_version=config.model_configs[config.chosen_model_size].glove_version,
     )
 
-    config.dataset.src_sos_token_id = src_tokenizer.sos_token_idx
-    config.dataset.src_eos_token_id = src_tokenizer.eos_token_idx
-    config.dataset.src_pad_token_id = src_tokenizer.pad_token_idx
-    config.dataset.src_unk_token_id = src_tokenizer.unk_token_idx
-    config.dataset.tgt_sos_token_id = tgt_tokenizer.sos_token_idx
-    config.dataset.tgt_eos_token_id = tgt_tokenizer.eos_token_idx
-    config.dataset.tgt_pad_token_id = tgt_tokenizer.pad_token_idx
-    config.dataset.tgt_unk_token_id = tgt_tokenizer.unk_token_idx
+    config.tokenizer.src_sos_token_idx = src_tokenizer.sos_token_idx
+    config.tokenizer.src_eos_token_idx = src_tokenizer.eos_token_idx
+    config.tokenizer.src_pad_token_idx = src_tokenizer.pad_token_idx
+    config.tokenizer.src_unk_token_idx = src_tokenizer.unk_token_idx
+    config.tokenizer.tgt_sos_token_idx = tgt_tokenizer.sos_token_idx
+    config.tokenizer.tgt_eos_token_idx = tgt_tokenizer.eos_token_idx
+    config.tokenizer.tgt_pad_token_idx = tgt_tokenizer.pad_token_idx
+    config.tokenizer.tgt_unk_token_idx = tgt_tokenizer.unk_token_idx
+
+    print(config.tokenizer.tgt_unk_token_idx)
 
     train_dataset = TranslationDataset(
         train_src_texts,
@@ -656,7 +680,7 @@ def build_data_utils(
         tgt_tokenizer,
         src_lang=config.dataset.src_lang,
         tgt_lang=config.dataset.tgt_lang,
-        max_sequence_length=config.model_parameters.tokenizer_max_len,
+        max_sequence_length=config.tokenizer.max_seq_len,
     )
     test_dataset = TranslationDataset(
         test_src_texts,
@@ -665,7 +689,7 @@ def build_data_utils(
         tgt_tokenizer,
         src_lang=config.dataset.src_lang,
         tgt_lang=config.dataset.tgt_lang,
-        max_sequence_length=config.model_parameters.tokenizer_max_len,
+        max_sequence_length=config.tokenizer.max_seq_len,
     )
 
     print(f"Train dataset length: {len(train_dataset)}")
@@ -681,8 +705,8 @@ def build_data_utils(
         num_workers=config.train_dataloader.num_workers,
         collate_fn=partial(
             batch_collate_fn,
-            src_pad_token_id=config.dataset.src_pad_token_id,
-            tgt_pad_token_id=config.dataset.tgt_pad_token_id,
+            src_pad_token_id=config.tokenizer.src_pad_token_idx,
+            tgt_pad_token_id=config.tokenizer.tgt_pad_token_idx,
         ),
         shuffle=config.train_dataloader.shuffle,
         drop_last=config.train_dataloader.drop_last,
@@ -694,8 +718,8 @@ def build_data_utils(
         num_workers=config.test_dataloader.num_workers,
         collate_fn=partial(
             batch_collate_fn,
-            src_pad_token_id=config.dataset.src_pad_token_id,
-            tgt_pad_token_id=config.dataset.tgt_pad_token_id,
+            src_pad_token_id=config.tokenizer.src_pad_token_idx,
+            tgt_pad_token_id=config.tokenizer.tgt_pad_token_idx,
         ),
         shuffle=config.test_dataloader.shuffle,
         drop_last=config.test_dataloader.drop_last,
