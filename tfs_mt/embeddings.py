@@ -1,5 +1,9 @@
+import os
+
 import torch
 import torch.nn as nn
+
+from .data_utils import download_glove
 
 
 class TokenizerNotSuppliedError(Exception):
@@ -105,6 +109,10 @@ class Embedding(nn.Module):
         if emb_type == "GloVe":
             tokenizer = kwargs["tokenizer"]
 
+            if not os.path.isfile(embeddings_path):
+                output_dir = "/".join(embeddings_path.split("/")[:-2])
+                download_glove(output_dir, glove_version=embeddings_path.split("/")[-2])
+
             with open(embeddings_path, encoding="utf-8") as f:
                 embeddings_dim = len(f.readline().strip().split()) - 1
             embeddings_lut = nn.Embedding(tokenizer.vocab_size, embeddings_dim)
@@ -115,6 +123,11 @@ class Embedding(nn.Module):
                 for line in f:
                     parts = line.strip().split()
                     idx, _ = tokenizer.encode(parts[0])
+                    # If tokenization if non perfectly compatible with the GloVe one, idx can be a sequence of tokens longer then 3
+                    # (Consider the first and last tokens coming out of tokenizer.encode are SOS_TOKEN and EOS_TOKEN)
+                    # This is a useful check to avoid overwriting in the embeddings_lut matrix
+                    if len(idx) > 3:
+                        continue
                     idx = idx[1]  # The first token coming out of tokenizer.encode is SOS_TOKEN
                     if len(parts[1:]) != embeddings_dim:  # Skip unhandled tokens with spaces, eg. "1 3/4"
                         continue

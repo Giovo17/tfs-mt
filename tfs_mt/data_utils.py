@@ -1,10 +1,13 @@
 import os
+import re
+import string
 import zipfile
 from collections import Counter
 from functools import partial
 from multiprocessing import Pool
 
 import ignite.distributed as idist
+import numpy as np
 import requests
 import torch
 from datasets import load_dataset
@@ -42,7 +45,7 @@ def parse_glove_tokens(lines: list[str]) -> list[str]:
     For each line it removes any extra spaces, splits it by spaces and take the first part building the tokens' list.
 
     It skips "malformed" tokens to avoid duplicates in vocabulary.
-    The GloVe file contains tokens with spaces inside, eg. `103 3/4`, which are not handled by the `TrasformerTokenizer` for simplicity.
+    The GloVe file contains tokens with spaces inside, eg. `103 3/4`, which are not handled by the tokenizer for simplicity.
     """
     result = []
     for line in lines:
@@ -180,14 +183,24 @@ class WordTokenizer:
         Returns:
             List[str]: List of string tokens from text.
         """
+
         text = text.strip().lower()
 
         for contraction, replacement in self.contractions.items():
-            text = text.replace(contraction, replacement)
+            pattern = r"([a-zA-Z]+)" + re.escape(contraction) + r"\b"
+            text = re.sub(pattern, r"\1" + replacement, text)
 
-        tokens = text.split()
+        words = text.split()
 
-        return [token[:1000] for token in tokens][: self.tokenizer_max_len]
+        tokens = []
+        for word in words:
+            if word and word[-1] in string.punctuation:
+                tokens.append(word[:-1])
+                tokens.append(word[-1])
+            else:
+                tokens.append(word)
+
+        return tokens[: self.tokenizer_max_len]
 
     def from_pretrained(self):
         # TODO
@@ -274,10 +287,15 @@ class WordTokenizer:
                     glove_tokens.extend(lst)
 
                 initial_size = len(vocab)
-                vocab.extend(glove_tokens)
-                vocab = list(set(vocab))
                 if self.max_vocab_size != -1:
-                    vocab = vocab[: self.max_vocab_size]  # Cap to max_vocab_size
+                    for tok in glove_tokens:
+                        if tok not in vocab:
+                            vocab.append(tok)
+                        if len(vocab) == self.max_vocab_size:
+                            break
+                else:
+                    vocab.extend(glove_tokens)
+                    vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
 
@@ -354,10 +372,15 @@ class WordTokenizer:
                 glove_tokens = parse_glove_tokens(lines)
 
                 initial_size = len(vocab)
-                vocab.extend(glove_tokens)
-                vocab = list(set(vocab))
                 if self.max_vocab_size != -1:
-                    vocab = vocab[: self.max_vocab_size]  # Cap to max_vocab_size
+                    for tok in glove_tokens:
+                        if tok not in vocab:
+                            vocab.append(tok)
+                        if len(vocab) == self.max_vocab_size:
+                            break
+                else:
+                    vocab.extend(glove_tokens)
+                    vocab = list(set(vocab))
 
                 print(f"Added {len(vocab) - initial_size} tokens from GloVe")
 
@@ -371,25 +394,40 @@ class WordTokenizer:
 
         print(f"Built vocabulary with {len(vocab)} tokens.")
 
-    def encode(self, input_sequence: str | list[str], pad_to_len: int | None = None) -> tuple[list[int], list[bool]]:
+    def encode(
+        self,
+        input_sequence: str | list[str] | np.ndarray | torch.Tensor,
+        pad_to_len: int | None = None,
+        return_only_mask: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Tokenizer encode function.
 
         It also returns the mask to be used during attention in order not compute it with respect to PAD tokens.
         The mask is designed to True where there's a token with the model has to compute attention to, False otherwise.
 
         Args:
-            input_sequence (str | list[str]): Sequence to be encoded.
+            input_sequence (str | list[str] | np.ndarray | torch.Tensor): Sequence to be encoded or already encoded (useful in decoding stage when this method is only used to provide the mask).
             pad_to_len (int | None, optional): Sequence length to pad `input_sequence` with. Defaults to None.
+            return_only_mask (bool, optional). Return only attention mask. Defaults to False.
 
         Raises:
             VocabNotBuiltError: Raised when vocabulary is not built.
 
         Returns:
-            tuple[list[int], list[bool]]: List of token ids and mask.
+            tuple[np.ndarray, np.ndarray]: Array of token ids and mask.
         """
 
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
+
+        if return_only_mask:
+            if isinstance(input_sequence, np.ndarray):
+                mask = input_sequence != self.pad_token_idx
+            elif isinstance(input_sequence, torch.Tensor):
+                mask = (input_sequence != self.pad_token_idx).to(input_sequence.device)
+            else:
+                raise ValueError()
+            return mask
 
         # Useful when building a TranslationDataset in order to execute tokenize method only once
         tokens = self.tokenize(input_sequence) if isinstance(input_sequence, str) else input_sequence
@@ -406,17 +444,19 @@ class WordTokenizer:
             pad_to_len += 2  # Considering SOS and EOS tokens
             token_ids.extend([self.pad_token_idx for _ in range(pad_to_len - len(tokens))])
 
-        # Disabling attention to pad tokens
-        mask = [token != self.pad_token_idx for token in token_ids]
+        token_ids = np.array(token_ids, dtype=np.long)
+
+        # Mask to disable attention to pad tokens
+        mask = np.array([token != self.pad_token_idx for token in token_ids], dtype=np.bool)
 
         return token_ids, mask
 
-    def decode(self, token_ids: list[int]) -> list[str]:
+    def decode(self, token_ids: np.ndarray | list[str]) -> list[str]:
         """Decode token IDs.
         Returns the unknown token if the input token is not present in the vocabulary.
 
         Args:
-            token_ids (list[int]): List of tokens ids to decode into text.
+            token_ids (np.ndarray | list[str]): Array or list of tokens ids to decode into text.
 
         Raises:
             VocabNotBuiltError: Vocabulary is not built.
@@ -651,14 +691,14 @@ def build_data_utils(
         src_tokens,
         min_freq=config.tokenizer.vocab_min_freq,
         extend_with_glove=bool(
-            src_lang == "en"
+            src_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"
         ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
         glove_version=config.model_configs[config.chosen_model_size].glove_version,
     )
     tgt_tokenizer.build_vocab_parallel(
         tgt_tokens,
         min_freq=config.tokenizer.vocab_min_freq,
-        extend_with_glove=bool(tgt_lang == "en"),
+        extend_with_glove=bool(tgt_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"),
         glove_version=config.model_configs[config.chosen_model_size].glove_version,
     )
 
@@ -670,8 +710,6 @@ def build_data_utils(
     config.tokenizer.tgt_eos_token_idx = tgt_tokenizer.eos_token_idx
     config.tokenizer.tgt_pad_token_idx = tgt_tokenizer.pad_token_idx
     config.tokenizer.tgt_unk_token_idx = tgt_tokenizer.unk_token_idx
-
-    print(config.tokenizer.tgt_unk_token_idx)
 
     train_dataset = TranslationDataset(
         train_src_texts,
