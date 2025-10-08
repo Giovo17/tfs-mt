@@ -326,12 +326,13 @@ class Transformer(nn.Module):
         num_heads: int = 8,
         d_ff: int = 2048,
         dropout_prob: float = 0.1,
+        max_seq_len: int = 128,
         **kwargs,
     ):
         super().__init__()
 
         # Source embedding init
-        if kwargs.get("src_emb_from_pretrained"):
+        if kwargs.get("src_emb_from_pretrained") is not None:
             if "src_emb_pretrained_type" not in kwargs or "src_emb_pretrained_path" not in kwargs:
                 raise MissingArgumentsError("src")
             if "src_tokenizer" not in kwargs and kwargs["src_emb_pretrained_type"] == "GloVe":
@@ -348,7 +349,7 @@ class Transformer(nn.Module):
             self.src_embeddings = Embedding(src_vocab_size, d_model)
 
         # Target embedding init
-        if kwargs.get("tgt_emb_from_pretrained"):
+        if kwargs.get("tgt_emb_from_pretrained") is not None:
             if "tgt_emb_pretrained_type" not in kwargs or "tgt_emb_pretrained_path" not in kwargs:
                 raise MissingArgumentsError("tgt")
             if "tgt_tokenizer" not in kwargs and kwargs["tgt_emb_pretrained_type"] == "GloVe":
@@ -364,8 +365,8 @@ class Transformer(nn.Module):
         else:
             self.tgt_embeddings = Embedding(tgt_vocab_size, d_model)
 
-        self.src_pos_embeddings = SinusoidalPositionalEncoding(d_model, dropout_prob)
-        self.tgt_pos_embeddings = SinusoidalPositionalEncoding(d_model, dropout_prob)
+        self.src_pos_embeddings = SinusoidalPositionalEncoding(d_model, dropout_prob, max_sequence_length=max_seq_len)
+        self.tgt_pos_embeddings = SinusoidalPositionalEncoding(d_model, dropout_prob, max_sequence_length=max_seq_len)
 
         self.encoder = nn.ModuleList([
             EncoderBlock(d_model, num_heads, d_ff, dropout_prob) for _ in range(num_encoder_blocks)
@@ -386,6 +387,7 @@ class Transformer(nn.Module):
         """
         for name, p in self.named_parameters():
             if skip_embeddings is not None and f"{skip_embeddings}_embeddings" in name:
+                print(f"Skipping Xavier init for {skip_embeddings} embeddings")
                 continue
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p, gain=nn.init.calculate_gain("relu"))
@@ -431,6 +433,48 @@ class Transformer(nn.Module):
 
         return decoder_output
 
+    # Methods needed during decoding
+    def encode(self, src_sequence: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
+        src_x = self.src_embeddings(src_sequence)
+        src_x = self.src_pos_embeddings(src_x)
+
+        src_mask = src_mask.unsqueeze(1).unsqueeze(2)
+        src_mask = torch.matmul(src_mask.to(torch.float).transpose(-1, -2), src_mask.to(torch.float)).to(torch.bool)
+
+        encoder_representation = src_x
+        for i in range(len(self.encoder)):
+            encoder_representation = self.encoder[i](encoder_representation, src_mask)
+
+        return encoder_representation
+
+    def decode(
+        self,
+        tgt_sequence: torch.Tensor,
+        encoder_representation: torch.Tensor,
+        tgt_mask: torch.Tensor,
+        src_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        tgt_x = self.tgt_embeddings(tgt_sequence)
+        tgt_x = self.tgt_pos_embeddings(tgt_x)
+
+        tgt_mask = tgt_mask.unsqueeze(1).unsqueeze(2)
+        src_mask = src_mask.unsqueeze(1).unsqueeze(2)
+        tgt_mask = torch.matmul(tgt_mask.to(torch.float).transpose(-1, -2), tgt_mask.to(torch.float)).to(torch.bool)
+        src_mask = torch.matmul(src_mask.to(torch.float).transpose(-1, -2), src_mask.to(torch.float)).to(torch.bool)
+
+        causal_mask = (
+            torch.triu(torch.ones((tgt_mask.shape[0], 1, tgt_mask.shape[-1], tgt_mask.shape[-1])), diagonal=1) == 0
+        ).to(tgt_mask.device)
+        tgt_mask = tgt_mask & causal_mask
+
+        decoder_representation = tgt_x
+        for i in range(len(self.decoder)):
+            decoder_representation = self.decoder[i](decoder_representation, encoder_representation, tgt_mask, src_mask)
+
+        decoder_output = self.unembedding_matrix(decoder_representation)
+
+        return decoder_output
+
 
 def build_model(
     config: DictConfig | ListConfig, src_tokenizer: WordTokenizer, tgt_tokenizer: WordTokenizer
@@ -455,7 +499,9 @@ def build_model(
         raise ModelSizeNotChoosen()
 
     # GloVe embeddings available only for English language
-    if config.dataset.src_lang != "en" and config.dataset.tgt_lang != "en":
+    if (
+        config.dataset.src_lang != "en" and config.dataset.tgt_lang != "en"
+    ) or config.model_configs.pretrained_word_embeddings is None:
         model = Transformer(
             src_tokenizer.vocab_size,
             tgt_tokenizer.vocab_size,
@@ -465,6 +511,7 @@ def build_model(
             num_heads=config.model_configs[config.chosen_model_size].num_heads,
             d_ff=config.model_configs[config.chosen_model_size].d_ff,
             dropout_prob=config.model_parameters.dropout,
+            max_seq_len=config.tokenizer.max_seq_len,
         )
         model.init_params()
 
@@ -484,6 +531,7 @@ def build_model(
                 num_heads=config.model_configs[config.chosen_model_size].num_heads,
                 d_ff=config.model_configs[config.chosen_model_size].d_ff,
                 dropout_prob=config.model_parameters.dropout,
+                max_seq_len=config.tokenizer.max_seq_len,
                 src_emb_from_pretrained=True,
                 src_emb_pretrained_type=config.model_configs.pretrained_word_embeddings,
                 src_emb_pretrained_path=glove_path,
@@ -501,6 +549,7 @@ def build_model(
                 num_heads=config.model_configs[config.chosen_model_size].num_heads,
                 d_ff=config.model_configs[config.chosen_model_size].d_ff,
                 dropout_prob=config.model_parameters.dropout,
+                max_seq_len=config.tokenizer.max_seq_len,
                 tgt_emb_from_pretrained=True,
                 tgt_emb_pretrained_type=config.model_configs.pretrained_word_embeddings,
                 tgt_emb_pretrained_path=glove_path,
