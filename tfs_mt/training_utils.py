@@ -6,26 +6,29 @@ from contextlib import suppress
 from datetime import datetime
 from logging import Logger
 
+import botocore
 import ignite.distributed as idist
 import torch
-from ignite.contrib.engines import common
 from ignite.engine import DeterministicEngine, Engine, Events
 from ignite.handlers import Checkpoint, DiskSaver, ProgressBar, global_step_from_engine
 from ignite.handlers.early_stopping import EarlyStopping
 from ignite.handlers.time_limit import TimeLimit
-from ignite.handlers.wandb_logger import WandBLogger
+from ignite.metrics import GpuInfo
 from ignite.metrics.metric import Metric
 from ignite.utils import setup_logger
 from omegaconf import OmegaConf
 from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
 from torch import nn
-from torch.amp import autocast
+from torch.amp import GradScaler, autocast
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DistributedSampler, Sampler
 
 from .data_utils import WordTokenizer
-from .ignite_custom_utils import S3Saver
+from .ignite_custom_utils.checkpoint import BucketNotFoundError, S3Saver
+from .ignite_custom_utils.common import setup_trackio_logging, setup_wandb_logging
+from .ignite_custom_utils.trackio_logger import TrackioLogger
+from .ignite_custom_utils.wandb_logger import WandBLogger
 
 
 class CheckpointNotFoundError(Exception):
@@ -43,18 +46,6 @@ class S3FailedDownloadError(Exception):
     def __init__(self, checkpoint_filepath, e):
         msg = f"Failed to download checkpoint from S3 ({checkpoint_filepath!s}): {e!s}"
         super().__init__(msg)
-
-
-def log_metrics(engine: Engine, tag: str) -> None:
-    """Log `engine.state.metrics` with given `engine` and `tag`.
-
-    Args:
-        engine (Engine): Instance of `Engine` which metrics to log.
-        tag (str): A string to add at the start of output.
-    """
-
-    metrics_format = f"{tag} [{engine.state.epoch}/{engine.state.iteration}]: {engine.state.metrics}"
-    engine.logger.info(metrics_format)
 
 
 def resume_from_ckpt(
@@ -129,10 +120,51 @@ def setup_output_dir(config: DictConfig | ListConfig, rank: int) -> str:
     return idist.broadcast(output_dir, src=0)  # Path(idist.broadcast(output_dir, src=0))
 
 
+def s3_upload(filepath: str, bucket: str, s3_key: str | None = None):
+    """Upload a file on S3 bucket."""
+    s3 = S3Saver._make_s3_client()
+    s3_key = s3_key or filepath.split("/")[-1]  # Default key = filename
+
+    # Verify bucket existence
+    try:
+        s3.head_bucket(Bucket=bucket)
+    except botocore.exceptions.ClientError as exc:
+        if exc.response["Error"]["Code"] == "404":
+            raise BucketNotFoundError(bucket) from exec
+        else:
+            raise
+
+    try:
+        s3.upload_file(filepath, bucket, s3_key)
+        print(f"Uploaded '{filepath}' to s3://{bucket}/{s3_key}")
+    except Exception as exc:
+        print(f"Failed to upload '{filepath}' to S3: {exc}")
+        raise
+
+
 def save_config(config: DictConfig | ListConfig, output_dir: str):
     """Save configuration to config-lock.yaml for result reproducibility."""
     with open(f"{output_dir}/config-lock.yaml", "w+") as f:
         OmegaConf.save(config, f)
+    # Upload to S3 endpoint
+    if config.s3_bucket_name is not None and config.exec_mode != "dummy":
+        s3_upload(
+            filepath=f"{output_dir}/config-lock.yaml",
+            bucket=config.s3_bucket_name,
+            s3_key=f"{config.model_name}/config-lock.yaml",
+        )
+
+
+def log_metrics(engine: Engine, tag: str) -> None:
+    """Log `engine.state.metrics` with given `engine` and `tag`.
+
+    Args:
+        engine (Engine): Instance of `Engine` which metrics to log.
+        tag (str): A string to add at the start of output.
+    """
+
+    metrics_format = f"{tag} [{engine.state.epoch}/{engine.state.iteration}]: {engine.state.metrics}"
+    engine.logger.info(metrics_format)
 
 
 def setup_logging(config: DictConfig | ListConfig) -> Logger:
@@ -160,18 +192,21 @@ def setup_exp_logging(
     trainer: Engine,
     optimizers: Optimizer | dict[str, Optimizer],
     evaluators: Engine | dict[str, Engine],
-) -> WandBLogger:
-    """Setup Experiment Tracking WandB logger from Ignite.
+    return_all_loggers: bool = False,
+) -> WandBLogger | tuple[WandBLogger, TrackioLogger]:
+    """Setup Experiment Tracking with WandB and Trackio loggers.
 
     Using common.setup_wandb_logging which setup an ignite's Engine compatible WandB logger.
     It takes as kwargs wandb.init compatible arguments.
+    Same for trackio.
 
     References:
     1. setup_wandb_logging documentation [[link](https://docs.pytorch.org/ignite/contrib/engines.html#ignite.contrib.engines.common.setup_wandb_logging)]
     2. WandBLogger documentation [[link](https://docs.pytorch.org/ignite/generated/ignite.handlers.wandb_logger.html#ignite.handlers.wandb_logger.WandBLogger)]
     3. wandb.init documentation [[link](https://docs.wandb.ai/ref/python/sdk/functions/init/)]
+    4. trackio.init documentation [[link](https://huggingface.co/docs/trackio/en/api#trackio.init)]
     """
-    logger = common.setup_wandb_logging(
+    wandb_logger = setup_wandb_logging(
         trainer,
         optimizers,
         evaluators,
@@ -183,7 +218,20 @@ def setup_exp_logging(
         config=config._content,
         tags=["pytorch", "pytorch", "nlp", "machine-translation"],
     )
-    return logger
+    if not return_all_loggers:
+        return wandb_logger
+
+    trackio_logger = setup_trackio_logging(
+        trainer,
+        optimizers,
+        evaluators,
+        config.log_every_iters,
+        # trackio.init kwargs
+        project=config.model_base_name,
+        name=config.model_name,
+        config=config._content,
+    )
+    return wandb_logger, trackio_logger
 
 
 def setup_handlers(
@@ -192,17 +240,18 @@ def setup_handlers(
     config: DictConfig | ListConfig,
     to_save_train: dict | None = None,
     to_save_test: dict | None = None,
+    enable_ckpt: bool = True,
 ) -> tuple[Checkpoint, Checkpoint]:
     """Setup Ignite handlers."""
 
-    ckpt_handler_train = ckpt_handler_test = None
-
-    if idist.get_rank() == 0:  # Setup checkpointing only on rank 0
+    if enable_ckpt and idist.get_rank() == 0:  # Setup checkpointing only on rank 0
         # Setup checkpoints savers
+
         saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
-        s3_saver = S3Saver(
-            bucket=f"{config.s3_bucket_name}",
-            prefix=f"{config.model_name}/",
+        s3_saver = (
+            S3Saver(bucket=config.s3_bucket_name, prefix=config.model_name + "/")
+            if config.s3_bucket_name is not None
+            else None
         )
 
         # Local checkpointing during training
@@ -216,6 +265,17 @@ def setup_handlers(
             Events.ITERATION_COMPLETED(every=config.save_every_iters),
             ckpt_handler_train,
         )
+
+        # Offsite training checkpointing
+        if config.s3_bucket_name is not None:
+            ckpt_handler_train_s3 = Checkpoint(
+                to_save_train,
+                s3_saver,
+                filename_prefix=config.model_base_name,
+                n_saved=config.checkpoints_retain_n,
+            )
+            trainer.add_event_handler(Events.ITERATION_COMPLETED(every=config.save_every_iters), ckpt_handler_train_s3)
+            trainer.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_train_s3)
 
         # Local checkpointing during evaluation
         global_step_transform = None
@@ -232,17 +292,18 @@ def setup_handlers(
         )
         evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test)
 
-        # Offsite checkpointing after training completes
-        ckpt_handler_test_s3 = Checkpoint(
-            to_save_test,
-            s3_saver,
-            filename_prefix="best",
-            n_saved=1,
-            global_step_transform=global_step_transform,
-            score_name="test_bleu",
-            score_function=Checkpoint.get_default_score_fn("Bleu"),
-        )
-        evaluator.add_event_handler(Events.COMPLETED, ckpt_handler_test_s3)
+        # Offsite testing checkpointing
+        if config.s3_bucket_name is not None:
+            ckpt_handler_test_s3 = Checkpoint(
+                to_save_test,
+                s3_saver,
+                filename_prefix="best",
+                n_saved=config.checkpoints_retain_n,
+                global_step_transform=global_step_transform,
+                score_name="test_bleu",
+                score_function=Checkpoint.get_default_score_fn("Bleu"),
+            )
+            evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test_s3)
 
     # Early stopping
     def score_fn(engine: Engine):
@@ -257,19 +318,18 @@ def setup_handlers(
         trainer.add_event_handler(Events.ITERATION_COMPLETED, TimeLimit(config.time_limit_sec))
 
     # Iterations and epochs progress bars
-    ProgressBar(persist=False).attach(
-        trainer, metric_names="all", event_name=Events.ITERATION_COMPLETED(every=config.update_pbar_every_iters)
-    )
     ProgressBar(persist=True, bar_format="").attach(
         trainer, event_name=Events.EPOCH_STARTED, closing_event_name=Events.COMPLETED
     )
     ProgressBar(persist=False).attach(
-        evaluator, metric_names="all", event_name=Events.ITERATION_COMPLETED(every=config.update_pbar_every_iters)
-    )
-    ProgressBar(persist=True, bar_format="").attach(
-        evaluator, event_name=Events.EPOCH_STARTED, closing_event_name=Events.COMPLETED
+        trainer, metric_names="all", event_name=Events.ITERATION_COMPLETED(every=config.update_pbar_every_iters)
     )
 
+    if torch.cuda.is_available():
+        GpuInfo().attach(trainer, name="gpu")
+
+    if not enable_ckpt:
+        return None, None
     return ckpt_handler_train, ckpt_handler_test
 
 
@@ -350,8 +410,7 @@ def setup_trainer(
 
     # Gradient scaler for mixed precision training. Not required for bfloat16 training, cause it has the same range of float32.
     # It helps prevent gradients with small magnitudes from underflowing when training with mixed precision.
-    # scaler = GradScaler(device, enabled=config.training_hp.use_amp)
-    scaler = None
+    scaler = GradScaler(device, enabled=config.training_hp.use_amp)
 
     def train_one_iter(
         engine: Engine | DeterministicEngine, batch: dict[str, torch.Tensor | str]
@@ -393,6 +452,16 @@ def setup_trainer(
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
+
+        # Log gradient norm
+        total_norm = 0
+        for p in model.parameters():
+            param_norm = p.grad.detach().data.norm(2)
+            total_norm += param_norm.item() ** 2
+        engine.state.gradient_norm = total_norm ** (1 / 2)
 
         metric = {
             "train_loss": loss.item(),
