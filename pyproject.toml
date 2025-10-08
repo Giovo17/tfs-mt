@@ -38,7 +38,7 @@ Documentation = "https://giovo17.github.io/tfs-mt/"
 [dependency-groups]
 dev = [
     "pytest>=8.4.1",
-    "prek>=0.2.1",
+    "prek>=0.2.4",
     "tox-uv>=1.26.2",
     "mypy>=1.17",
     "ruff>=0.12.7",
@@ -51,11 +51,13 @@ dev = [
     "torchinfo>=1.8.0",
     "ipywidgets>=8.1.7",
     "seaborn>=0.13.2",
-    "wandb==0.19.11",
+    "wandb==0.22.1", #"wandb==0.19.11",
     "python-dotenv>=1.1.1",
     "nbformat>=5.10.4",
     "boto3>=1.40.36",
     "pynvml<12",
+    "trackio>=0.5.0",
+    "moto>=5.1.14",
 ]
 
 [build-system]

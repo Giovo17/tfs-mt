@@ -5,12 +5,10 @@ save_every_iters: 20_000  # Only used for training, testing checkpoints will be 
 update_pbar_every_iters: 100
 checkpoints_retain_n: 5  # The number of checkpoints that will be saved are double the specified number, one half will come from training and the other from testing
 time_limit_sec: -1
-s3_bucket_name: tfs-mt-checkpoints
+s3_bucket_name: tfs-mt-checkpoints  # Set to null to disable s3 checkpointing
 
 # If null training will start from scratch
 ckpt_path_to_resume_from: null  #s3://bucket-name/path/to/checkpoint.pt or filesystem path
-
-wandb_organization: giovoteam
 
 model_base_name: tfs_mt
 
@@ -18,7 +16,7 @@ model_parameters:
   dropout: 0.1
 
 model_configs:
-  pretrained_word_embeddings: "GloVe"
+  pretrained_word_embeddings: "GloVe"  # Set to null to disable pretrained embeddings
   positional_embeddings: "sinusoidal"
   nano:
     num_encoder_layers: 4
@@ -26,6 +24,7 @@ model_configs:
     d_model: 50
     num_heads: 4
     d_ff: 200
+    # Considered only if pretrained_word_embeddings == "GloVe"
     glove_version: "glove.2024.wikigiga.50d"
     glove_filename: "wiki_giga_2024_50_MFT20_vectors_seed_123_alpha_0.75_eta_0.075_combined"
   small:
@@ -74,8 +73,8 @@ tokenizer:
   eos_token: "</s>"
   pad_token: "<PAD>"
   unk_token: "<UNK>"
-  max_seq_len: 128
-  max_vocab_size: 60_000
+  max_seq_len: 256
+  max_vocab_size: 70_000
   vocab_min_freq: 2
   num_workers: 4
 
@@ -89,13 +88,13 @@ dataset:
   max_len: -1
 
 train_dataloader:
-  batch_size: 64
-  num_workers: 16
+  batch_size: 128
+  num_workers: 8
   shuffle: True
   drop_last: True
 
 test_dataloader:
-  batch_size: 64
-  num_workers: 16
+  batch_size: 128
+  num_workers: 8
   shuffle: False
   drop_last: False
