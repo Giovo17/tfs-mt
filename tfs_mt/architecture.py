@@ -160,7 +160,7 @@ class MultiHeadAttention(nn.Module):
 
         if attention_mask is not None:
             # NOTE Adding this control to correctly process masking considering that target input sequence will be shrinked by one token
-            # This is expecially needed when computing cross attention in decoder blocks due to the usage of src_mask which cannot be shrinked accordingly a priori
+            # This is especially needed when computing cross attention in decoder blocks due to the usage of src_mask which cannot be shrinked accordingly a priori
             if attention_mask.shape[-1] > QKt.shape[-1] or attention_mask.shape[-2] > QKt.shape[-2]:
                 attention_mask = attention_mask[:, :, : QKt.shape[-2], : QKt.shape[-1]]
             QKt.masked_fill_(attention_mask == False, float("-inf"))
@@ -181,7 +181,7 @@ class FeedForward(nn.Module):
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(d_model, d_ff),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Dropout(dropout_prob),
             nn.Linear(d_ff, d_model),
         )
@@ -233,7 +233,7 @@ class EncoderBlock(nn.Module):
     def forward(self, x: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
         t1 = self.layer_norm1(x)
         t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=attention_mask)
-        # We apply dropout [33] to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attentio is all you need page 8)
+        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
         t2 = self.dropout(t2)
         t3 = t2 + x
 
@@ -390,7 +390,7 @@ class Transformer(nn.Module):
                 print(f"Skipping Xavier init for {skip_embeddings} embeddings")
                 continue
             if p.dim() > 1:
-                nn.init.xavier_uniform_(p, gain=nn.init.calculate_gain("relu"))
+                nn.init.xavier_uniform_(p)
 
     def forward(
         self, src_sequence: torch.Tensor, tgt_sequence: torch.Tensor, src_mask: torch.Tensor, tgt_mask: torch.Tensor
