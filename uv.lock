@@ -4297,7 +4297,7 @@ dev = [
     { name = "torchinfo", specifier = ">=1.8.0" },
     { name = "tox-uv", specifier = ">=1.26.2" },
     { name = "trackio", specifier = ">=0.5.3" },
-    { name = "wandb", specifier = "==0.22.1" },
+    { name = "wandb", specifier = ">=0.22.1" },
 ]
 
 [[package]]
