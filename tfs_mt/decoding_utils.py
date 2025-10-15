@@ -6,6 +6,7 @@ from .architecture import Transformer
 from .data_utils import WordTokenizer
 
 
+@torch.inference_mode()
 def greedy_decoding(
     config: DictConfig | ListConfig,
     model: Transformer,
@@ -61,22 +62,24 @@ def greedy_decoding(
         with torch.inference_mode():
             encoder_representation = model.encode(src_sequences, src_masks)
 
-            encoded_sequence = greedy_decoding(
-                config=config,
-                model=model,
-                encoder_representation=encoder_representation,
-                src_mask=src_masks,
-                tgt_tokenizer=tgt_tokenizer,
-                max_target_tokens=config.tokenizer.max_seq_len
-            )
+        encoded_sequence = greedy_decoding(
+            config=config,
+            model=model,
+            encoder_representation=encoder_representation,
+            src_mask=src_masks,
+            tgt_tokenizer=tgt_tokenizer,
+            max_target_tokens=config.tokenizer.max_seq_len
+        )
         ```
     """
 
     device = next(model.parameters()).device
 
     # Generate a batch of sequences starting with SOS token, batch size is inferred by the encoder representation tensor
-    tgt_sequence_batch_text = [[tgt_tokenizer.sos_token_idx] for _ in range(encoder_representation.shape[0])]
-    tgt_sequence_batch = torch.tensor(tgt_sequence_batch_text, device=device)
+    tgt_sequence_batch_text = [[config.tokenizer.sos_token] for _ in range(encoder_representation.shape[0])]
+    tgt_sequence_batch = torch.tensor(
+        [[tgt_tokenizer.sos_token_idx] for _ in range(encoder_representation.shape[0])], device=device
+    )
 
     # This list handles when to stop the tokens generation for each sequence in the batch
     is_decoded = [False] * encoder_representation.shape[0]
@@ -138,6 +141,7 @@ def greedy_decoding(
     return post_processed_sequences
 
 
+@torch.inference_mode()
 def beam_decoding(
     config: DictConfig | ListConfig,
     model: Transformer,
