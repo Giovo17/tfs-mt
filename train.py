@@ -31,6 +31,7 @@ from tfs_mt.architecture import build_model
 from tfs_mt.data_utils import build_data_utils
 from tfs_mt.decoding_utils import greedy_decoding
 from tfs_mt.training_utils import (
+    get_param_groups,
     log_metrics,
     loss_metric_transform,
     nlp_metric_transform,
@@ -162,15 +163,17 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     model = idist.auto_model(init_model)
 
     if distributed:
-        config.training_hp.optimizer.learning_rate *= idist.get_world_size()
+        config.training_hp.lr_scheduler.min_lr *= idist.get_world_size()
+        config.training_hp.lr_scheduler.max_lr *= idist.get_world_size()
+
+    model_param_groups = get_param_groups(model, config.training_hp.optimizer.weight_decay)
     init_optimizer = AdamW(
-        model.parameters(),
+        model_param_groups,
         lr=config.training_hp.lr_scheduler.min_lr,
         betas=(config.training_hp.optimizer.beta1, config.training_hp.optimizer.beta2),
-        weight_decay=config.training_hp.optimizer.weight_decay,
     )
-    # Get optimizer ready for multigpu training if available
-    optimizer = idist.auto_optim(init_optimizer)
+    optimizer = idist.auto_optim(init_optimizer)  # Get optimizer ready for multigpu training if available
+
     loss_fn = CrossEntropyLoss(
         # Ignore padding tokens in loss computation
         ignore_index=tgt_tokenizer.pad_token_idx,

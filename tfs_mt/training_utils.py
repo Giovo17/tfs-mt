@@ -388,6 +388,25 @@ def loss_metric_transform(output: tuple[torch.Tensor, torch.Tensor]) -> tuple[to
     return output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1)
 
 
+def get_param_groups(model: nn.Module, weight_decay: float) -> list[dict[str, torch.nn.Parameter | float]]:
+    """TODO Doc"""
+
+    decay = []
+    no_decay = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        # Exclude biases, LayerNorm from weight decay regularization
+        if name.endswith(".bias") or "layer_norm" in name:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+    return [
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+
 def setup_lr_lambda_fn(config: DictConfig | ListConfig):
     """Setup function that will govern learning rate scheduling.
     Following the DeepSeek V3 [implementation](https://arxiv.org/abs/2412.19437) there have been considered 3 phases:
