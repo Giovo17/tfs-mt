@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10, <4.0"
 resolution-markers = [
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy' and sys_platform == 'linux'",
@@ -1514,6 +1514,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9c/cb/8ac0172223afbccb63986cc25049b154ecfb5e85932587206f42317be31d/itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173", size = 54410, upload-time = "2024-04-16T21:28:15.614Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef", size = 16234, upload-time = "2024-04-16T21:28:14.499Z" },
+]
+
+[[package]]
+name = "jaxtyping"
+version = "0.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wadler-lindig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/1e/827f9e17b26e21c7d4d934fd1a214284ad05663afedd37c21ed105db366b/jaxtyping-0.3.3.tar.gz", hash = "sha256:8003cfd16ba2ad9b47fdda1d982a575299a81ddfc7997ad0e917c87a0897ea86", size = 45484, upload-time = "2025-10-01T13:46:51.933Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/97/88264b1af140f66ba7ca6eb2f3a108be233ee278bb3f1d5c750243e7458a/jaxtyping-0.3.3-py3-none-any.whl", hash = "sha256:a1c2f0f4351a8deda84b0e3b5c5a50894a1cdae2b82d841279fce4393aff4a7c", size = 55926, upload-time = "2025-10-01T13:46:50.621Z" },
 ]
 
 [[package]]
@@ -4213,6 +4225,7 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "datasets" },
+    { name = "jaxtyping" },
     { name = "omegaconf" },
     { name = "pytorch-ignite" },
     { name = "pyyaml" },
@@ -4251,6 +4264,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", specifier = ">=4.0.0" },
+    { name = "jaxtyping", specifier = ">=0.3.3" },
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "pytorch-ignite", specifier = ">=0.5.2" },
     { name = "pyyaml", specifier = ">=6.0.2" },
@@ -4282,7 +4296,7 @@ dev = [
     { name = "skops", specifier = ">=0.13.0" },
     { name = "torchinfo", specifier = ">=1.8.0" },
     { name = "tox-uv", specifier = ">=1.26.2" },
-    { name = "trackio", specifier = ">=0.5.0" },
+    { name = "trackio", specifier = ">=0.5.3" },
     { name = "wandb", specifier = "==0.22.1" },
 ]
 
@@ -4473,7 +4487,7 @@ wheels = [
 
 [[package]]
 name = "trackio"
-version = "0.5.0"
+version = "0.5.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gradio", extra = ["oauth"] },
@@ -4484,9 +4498,8 @@ dependencies = [
     { name = "pandas" },
     { name = "pillow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/12/50c29b78fbfccf86f5e8def4e6815c0d1f80662f8851d06918a6ee269298/trackio-0.5.0.tar.gz", hash = "sha256:e4c38dfe60666273edd9a6223efca7eb8bae579cfb92598f5d62a4a03634ad8f", size = 917477, upload-time = "2025-10-02T19:28:41.668Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/e2/07c7a4af5e6faaedd00e4eb308ce5cfac82b8eaebf277a39c14a090e0e4e/trackio-0.5.0-py3-none-any.whl", hash = "sha256:7b25ca5736b60eb90f63b611baca3fdbbb82f4b89fc1df39f5d5ae1110aaf593", size = 864398, upload-time = "2025-10-02T19:28:40.082Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/4a/27946c4d957c60862ed4cfc659c1b7735f4fb9c03b737a81885861237482/trackio-0.5.3-py3-none-any.whl", hash = "sha256:5afa18a9da0317c7857f57d31d1049ba241e3f368ddb1b08f3dd72a6722ec6eb", size = 866326, upload-time = "2025-10-14T22:14:37.969Z" },
 ]
 
 [[package]]
@@ -4640,6 +4653,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a9/96/0834f30fa08dca3738614e6a9d42752b6420ee94e58971d702118f7cfd30/virtualenv-20.32.0.tar.gz", hash = "sha256:886bf75cadfdc964674e6e33eb74d787dff31ca314ceace03ca5810620f4ecf0", size = 6076970, upload-time = "2025-07-21T04:09:50.985Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/c6/f8f28009920a736d0df434b52e9feebfb4d702ba942f15338cb4a83eafc1/virtualenv-20.32.0-py3-none-any.whl", hash = "sha256:2c310aecb62e5aa1b06103ed7c2977b81e042695de2697d01017ff0f1034af56", size = 6057761, upload-time = "2025-07-21T04:09:48.059Z" },
+]
+
+[[package]]
+name = "wadler-lindig"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/67/cbae4bf7683a64755c2c1778c418fea96d00e34395bb91743f08bd951571/wadler_lindig-0.1.7.tar.gz", hash = "sha256:81d14d3fe77d441acf3ebd7f4aefac20c74128bf460e84b512806dccf7b2cd55", size = 15842, upload-time = "2025-06-18T07:00:42.843Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/96/04e7b441807b26b794da5b11e59ed7f83b2cf8af202bd7eba8ad2fa6046e/wadler_lindig-0.1.7-py3-none-any.whl", hash = "sha256:e3ec83835570fd0a9509f969162aeb9c65618f998b1f42918cfc8d45122fe953", size = 20516, upload-time = "2025-06-18T07:00:41.684Z" },
 ]
 
 [[package]]
