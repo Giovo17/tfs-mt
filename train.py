@@ -8,6 +8,7 @@
 
 import argparse
 import gc
+import logging
 import os
 from datetime import datetime
 from functools import partial
@@ -15,13 +16,15 @@ from pprint import pformat
 
 import ignite.distributed as idist
 import torch
+from dotenv import load_dotenv
 from ignite.engine import Events
-from ignite.handlers import FastaiLRFinder, PiecewiseLinear
 from ignite.metrics import Bleu, Loss, Rouge
-from ignite.utils import manual_seed
+from ignite.utils import manual_seed, setup_logger
 from omegaconf import OmegaConf
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
+from torch.profiler import ProfilerActivity, profile, record_function
 from torchinfo import summary
 
 from tfs_mt.architecture import build_model
@@ -32,26 +35,30 @@ from tfs_mt.training_utils import (
     loss_metric_transform,
     nlp_metric_transform,
     resume_from_ckpt,
+    s3_upload,
     save_config,
     setup_evaluator,
     setup_exp_logging,
     setup_handlers,
-    setup_logging,
+    setup_lr_lambda_fn,
     setup_output_dir,
     setup_trainer,
 )
 
+load_dotenv()
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # remove tokenizer parallelism warning
 
 
+# Torch profiler activities
+activities = [ProfilerActivity.CPU]
+
 if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
+    activities += [ProfilerActivity.CUDA]
 
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 wandb_api_key = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_API_KEY"] = wandb_api_key
@@ -63,10 +70,10 @@ cache_ds_path = os.path.join(base_path, "data")
 time_limit_sec = -1
 
 
-class EpochConfigError(Exception):
-    def __init__(self, num_warmup_epochs, num_epochs):
-        msg = f"num_warmup_epochs cannot be greater than num_epochs, \
-        got num_warmup_epochs={num_warmup_epochs}, num_epochs={num_epochs}"
+class TooManyWarmupItersError(Exception):
+    def __init__(self, warmup_iters, total_iters):
+        msg = f"The number of warmup iterations cannot be greater than 50% the total number of iterations, \
+        got warmup_iters: {warmup_iters}, total_iterations: {total_iters}"
         super().__init__(msg)
 
 
@@ -80,53 +87,105 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
         idist.barrier()
 
         if rank == 0:
-            save_config(config, output_dir)
+            save_config(config, output_dir, enable_ckpt=enable_log_ckpt)
     else:
         rank = 0
         manual_seed(config.seed)
         output_dir = setup_output_dir(config, 0)
         config.output_dir = output_dir
-        save_config(config, config.output_dir)
+        save_config(config, config.output_dir, enable_ckpt=enable_log_ckpt)
 
-    train_dataloader, test_dataloader, _, _, src_tokenizer, tgt_tokenizer = build_data_utils(config, return_all=True)
+    # Setup logger
+    logger = setup_logger(level=logging.INFO, filepath=os.path.join(config.output_dir, "training-info.log"))
+    logger.info("Configuration: \n%s", pformat(config))
 
-    config.num_iters_per_epoch = len(train_dataloader)
+    # Resume tokenizer from pretrained and build data utils
+    if config.ckpt_path_to_resume_from is not None:
+        src_tokenizer, tgt_tokenizer = resume_from_ckpt(
+            config.ckpt_path_to_resume_from, logger=logger, resume_tokenizers=True
+        )
+        print("Tokenizers restored from pretrained.")
+        train_dataloader, test_dataloader = build_data_utils(
+            config, src_tokenizer=src_tokenizer, tgt_tokenizer=tgt_tokenizer
+        )
+
+    else:  # Build data utils from scratch
+        train_dataloader, test_dataloader, _, _, src_tokenizer, tgt_tokenizer = build_data_utils(
+            config, return_all=True
+        )
+
+    # Save tokenizers
+    src_tokenizer.to_json(config.output_dir + "/src_tokenizer.json")
+    tgt_tokenizer.to_json(config.output_dir + "/tgt_tokenizer.json")
+    if config.s3_bucket_name is not None and enable_log_ckpt:
+        s3_upload(
+            filepath=config.output_dir + "/src_tokenizer.json",
+            bucket=config.s3_bucket_name,
+            s3_key=f"{config.model_name}/src_tokenizer.json",
+        )
+        s3_upload(
+            filepath=config.output_dir + "/tgt_tokenizer.json",
+            bucket=config.s3_bucket_name,
+            s3_key=f"{config.model_name}/tgt_tokenizer.json",
+        )
+        print(f"Uploaded tokenizers to s3://{config.s3_bucket_name}")
+
+    config.num_train_iters_per_epoch = len(train_dataloader)
+
+    # Raise exception if warmup iterations are more than 50% of total iterations
+    if (
+        config.training_hp.lr_scheduler.warmup_iters
+        > 0.5 * config.training_hp.num_epochs * config.num_train_iters_per_epoch
+    ):
+        raise TooManyWarmupItersError(
+            config.training_hp.lr_scheduler.warmup_iters,
+            config.training_hp.num_epochs * config.num_train_iters_per_epoch,
+        )
 
     # Initialize model, optimizer, loss function, device or resume from checkpoint
     device = idist.device()
     init_model = build_model(config, src_tokenizer, tgt_tokenizer)
-    init_model = torch.compile(init_model)
-    print(
-        summary(
-            init_model,
-            [(16, 128), (16, 128), (16, 128), (16, 128)],
-            dtypes=[torch.long, torch.long, torch.bool, torch.bool],
+    if torch.cuda.is_available():
+        init_model = torch.compile(init_model, mode="max-autotune")
+    try:
+        logger.info(
+            summary(
+                init_model,
+                [(16, 128), (16, 128), (16, 128), (16, 128)],
+                dtypes=[torch.long, torch.long, torch.bool, torch.bool],
+            )
         )
-    )
+    except RuntimeError:
+        logger.info(f"Total number of parameters: {sum(p.numel() for p in init_model.parameters())}")
 
     # Get model ready for multigpu training if available and move the model to current device
     model = idist.auto_model(init_model)
 
     if distributed:
-        config.training_hp.optimizer_args.learning_rate *= idist.get_world_size()
+        config.training_hp.optimizer.learning_rate *= idist.get_world_size()
     init_optimizer = AdamW(
         model.parameters(),
-        lr=config.training_hp.optimizer_args.learning_rate,
-        weight_decay=config.training_hp.optimizer_args.weight_decay,
+        lr=config.training_hp.lr_scheduler.min_lr,
+        betas=(config.training_hp.optimizer.beta1, config.training_hp.optimizer.beta2),
+        weight_decay=config.training_hp.optimizer.weight_decay,
     )
-    # Get model ready for multigpu training if available
+    # Get optimizer ready for multigpu training if available
     optimizer = idist.auto_optim(init_optimizer)
-    loss_fn = CrossEntropyLoss(label_smoothing=config.training_hp.loss_label_smoothing).to(device=device)
+    loss_fn = CrossEntropyLoss(
+        # Ignore padding tokens in loss computation
+        ignore_index=tgt_tokenizer.pad_token_idx,
+        # This will average the loss over batch_size * sequence_length (pad tokens don't contribute to sequence_length)
+        reduction="mean",
+        # During training, we employed label smoothing of value 0.1 (Attention is all you need page 8)
+        # This reduces overconfidence and improves generalization
+        label_smoothing=config.training_hp.loss_label_smoothing,
+    ).to(device=device)
 
-    le = config.num_iters_per_epoch
-    milestones_values = [
-        (0, 0.0),
-        (le * config.training_hp.num_warmup_epochs, config.training_hp.optimizer_args.learning_rate),
-        (le * config.training_hp.num_epochs, 0.0),
-    ]
-    lr_scheduler = PiecewiseLinear(optimizer, param_name="lr", milestones_values=milestones_values)
+    # Initialize learning rate scheduler
+    lr_lambda = setup_lr_lambda_fn(config)
+    lr_scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-    # Setup metrics to attach to evaluator
+    # Setup metrics
     metrics = {
         "Bleu": Bleu(
             ngram=4, smooth="smooth1", output_transform=partial(nlp_metric_transform, tgt_tokenizer=tgt_tokenizer)
@@ -143,15 +202,11 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     }
 
     # Setup trainer and evaluator
-    trainer = setup_trainer(config, model, optimizer, loss_fn, device, train_dataloader.sampler)
+    trainer = setup_trainer(config, model, optimizer, lr_scheduler, loss_fn, device, train_dataloader.sampler)
     train_evaluator, test_evaluator = setup_evaluator(config, model, metrics, device)
 
     # Setup engines logger with python logging print training configurations
-    logger = setup_logging(config)
-    logger.info("Configuration: \n%s", pformat(config))
     trainer.logger = train_evaluator.logger = test_evaluator.logger = logger
-
-    trainer.add_event_handler(Events.ITERATION_COMPLETED, lr_scheduler)
 
     # Setup ignite handlers
     to_save_train = {
@@ -162,9 +217,7 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     }
     to_save_test = {"model": model}
     # When enable_log_ckpt is False the two returned ckpt handlers will be None
-    ckpt_handler_train, ckpt_handler_test = setup_handlers(
-        trainer, test_evaluator, config, to_save_train, to_save_test, enable_ckpt=enable_log_ckpt
-    )
+    setup_handlers(trainer, test_evaluator, config, to_save_train, to_save_test, enable_ckpt=enable_log_ckpt)
 
     # Time profiling
     # profiler = HandlersTimeProfiler()
@@ -194,7 +247,7 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     # def run_train_eval():
     #     train_evaluator.run(train_dataloader)
     #     log_metrics(train_evaluator, "train")
-    @trainer.on(Events.EPOCH_COMPLETED(every=1))
+    @trainer.on(Events.ITERATION_COMPLETED(every=config.eval_every_iters))
     def run_test_eval():
         test_evaluator.run(test_dataloader)
         log_metrics(test_evaluator, "test")
@@ -224,7 +277,6 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
 
     # Clean GPU cache
     @trainer.on(Events.EPOCH_COMPLETED(every=1))
-    @test_evaluator.on(Events.EPOCH_COMPLETED(every=1))
     def cleanup_memory(engine):
         gc.collect()
         if torch.cuda.is_available():
@@ -239,52 +291,41 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     # Resume from checkpoint if option available in config
     if config.ckpt_path_to_resume_from is not None:
         resume_from_ckpt(
+            config.ckpt_path_to_resume_from,
             to_load=to_save_train,
-            checkpoint_filepath=config.ckpt_path_to_resume_from,
             device=device,
             logger=logger,
             strict=True,
         )
 
-    # Cyclical learning rate scheduling according to https://arxiv.org/abs/1506.01186
-    lr_finder = FastaiLRFinder()
-    to_save = {"model": model, "optimizer": optimizer}
-
-    with lr_finder.attach(
-        trainer,
-        to_save=to_save,
-        output_transform=lambda x: x["train_loss"],
-        start_lr=1e-5,  # config.training_hp.optimizer_args.learning_rate
-        end_lr=1e-2,
-        step_mode="exp",
-    ) as trainer_with_lr_finder:
-        trainer_with_lr_finder.run(
+    # Run and profile training (PyTorch official tutorial on profiling: https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html)
+    with (
+        profile(activities=activities, profile_memory=True, record_shapes=True) as prof,
+        record_function("model_training"),
+    ):
+        trainer.run(
             train_dataloader,
             max_epochs=config.training_hp.num_epochs,
         )
+    prof.export_chrome_trace(os.path.join(config.output_dir, "trace.json"))
+    if config.s3_bucket_name is not None and enable_log_ckpt:
+        s3_upload(
+            filepath=os.path.join(config.output_dir, "trace.json"),
+            bucket=config.s3_bucket_name,
+            s3_key=f"{config.model_name}/trace.json",
+        )
 
-    # Plot lr_finder results and get lr_finder suggestion
-    try:
-        ax = lr_finder.plot(skip_end=0)
-        ax.figure.savefig(config.output_dir + "/lr_finder_results.png")
-        print(lr_finder.lr_suggestion())
-    except Exception:
-        print("Unable to plot lr_finder results")
-
-    # trainer.run(
-    #     train_dataloader,
-    #     max_epochs=config.training_hp.num_epochs,
-    # )
-
+    # Close loggers and upload local log file to s3 if configured
     if enable_log_ckpt and rank == 0:
         exp_wandb_logger.close()
         exp_trackio_logger.close()
         # profiler.write_results(config.output_dir + "/time_profiling.csv")
-
-    if ckpt_handler_train is not None:
-        logger.info(f"Last training checkpoint name - {ckpt_handler_train.last_checkpoint}")
-    if ckpt_handler_test is not None:
-        logger.info(f"Last testing checkpoint name - {ckpt_handler_test.last_checkpoint}")
+    if config.s3_bucket_name is not None and enable_log_ckpt:
+        s3_upload(
+            filepath=os.path.join(config.output_dir, "training-info.log"),
+            bucket=config.s3_bucket_name,
+            s3_key=f"{config.model_name}/training-info.log",
+        )
 
 
 def parse_args():
@@ -306,12 +347,6 @@ if __name__ == "__main__":
         print("Distributed training, experiment logging and checkpointing are disabled!")
 
     config = OmegaConf.load(config_path)
-
-    if config.training_hp.num_warmup_epochs > config.training_hp.num_epochs:
-        raise EpochConfigError(
-            f"num_warmup_epochs cannot be greater than num_epochs, \
-        got num_warmup_epochs={config.training_hp.num_warmup_epochs}, num_epochs={config.training_hp.num_epochs}"
-        )
 
     if config.dataset.max_len > 0 and config.train_dataloader.batch_size > int(
         config.dataset.max_len * config.dataset.train_split

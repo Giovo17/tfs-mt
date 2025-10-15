@@ -1,4 +1,4 @@
-import logging
+import math
 import os
 import tempfile
 from collections.abc import Mapping
@@ -15,12 +15,12 @@ from ignite.handlers.early_stopping import EarlyStopping
 from ignite.handlers.time_limit import TimeLimit
 from ignite.metrics import GpuInfo
 from ignite.metrics.metric import Metric
-from ignite.utils import setup_logger
 from omegaconf import OmegaConf
 from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
 from torch import nn
 from torch.amp import GradScaler, autocast
+from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DistributedSampler, Sampler
 
@@ -49,24 +49,31 @@ class S3FailedDownloadError(Exception):
 
 
 def resume_from_ckpt(
-    to_load: Mapping,
     checkpoint_filepath: str,
-    device: torch.device,
-    logger: Logger,
+    to_load: Mapping | None = None,
+    device: torch.device | None = None,
+    logger: Logger | None = None,
     strict: bool = True,
-) -> None:
-    """Loads state dict from a checkpoint file to resume the training.
+    resume_tokenizers: bool = False,
+) -> None | tuple[WordTokenizer, WordTokenizer]:
+    """Loads state dict from a checkpoint file to resume the training or loads tokenizers.
     It supports loading from local or bucket s3 checkpoint.
 
     Args:
-        to_load (Mapping): A dictionary with objects.
         checkpoint_filepath (str): Path to the checkpoint file in S3 bucket or in filesystem.
-        device (torch.device): Device.
-        logger (Logger): To log info about resuming from a checkpoint.
+        to_load (Mapping | None, optional): A dictionary with objects.. Defaults to None.
+        device (torch.device | None, optional): Device. Defaults to None.
+        logger (Logger | None, optional): To log info about resuming from a checkpoint. Defaults to None.
         strict (bool, optional): Whether to strictly enforce that the keys in `state_dict` match the keys returned by this module's `state_dict()` function. Defaults to True.
+        resume_tokenizers (bool, optional): Whether to load only tokenizers. Defaults to False.
 
     Raises:
         CheckpointNotFoundError: Raised when checkpoint file doesn't exist.
+        InvalidCheckpointS3PathError: Raised when bucket and file key are not correctly extracted from provided url.
+        S3FailedDownloadError: Raised when download fails.
+
+    Returns:
+        None | tuple[WordTokenizer, WordTokenizer]: Pretrained tokenizers if resume_tokenizers. Otherwise None.
     """
 
     resume_method = "local"
@@ -77,7 +84,13 @@ def resume_from_ckpt(
         if not os.path.isfile(checkpoint_filepath):
             raise CheckpointNotFoundError(checkpoint_filepath)
 
-        checkpoint = torch.load(checkpoint_filepath, map_location="cpu")
+        if resume_tokenizers:
+            ckpt_basepath = "/".join(checkpoint_filepath.split("/")[:-1])
+            src_tokenizer = WordTokenizer.from_pretrained(ckpt_basepath + "/src_tokenizer.json")
+            tgt_tokenizer = WordTokenizer.from_pretrained(ckpt_basepath + "/tgt_tokenizer.json")
+            return src_tokenizer, tgt_tokenizer
+
+        checkpoint = torch.load(checkpoint_filepath, map_location=device)
 
         Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
         logger.info("Successfully resumed from a local checkpoint: %s", checkpoint_filepath)
@@ -89,23 +102,50 @@ def resume_from_ckpt(
         if bucket == "" or key == "":
             raise InvalidCheckpointS3PathError()
 
+        src_tokenizer_key = key.split("/")[0] + "/src_tokenizer.json" if resume_tokenizers else None
+        tgt_tokenizer_key = key.split("/")[0] + "/tgt_tokenizer.json" if resume_tokenizers else None
+
         s3 = S3Saver._make_s3_client()
 
-        # Download to a temporary file
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
+        if resume_tokenizers:  # Download tokenizers to temperary files
+            with (
+                tempfile.NamedTemporaryFile(delete=False) as src_tmp,
+                tempfile.NamedTemporaryFile(delete=False) as tgt_tmp,
+            ):
+                src_tmp_path = src_tmp.name
+                tgt_tmp_path = tgt_tmp.name
             try:
-                s3.download_file(bucket, key, tmp_path)
-            except Exception as e:
-                raise S3FailedDownloadError(checkpoint_filepath, e) from e
-            checkpoint = torch.load(tmp_path, map_location=device)
+                try:
+                    s3.download_file(bucket, src_tokenizer_key, src_tmp_path)
+                    s3.download_file(bucket, tgt_tokenizer_key, tgt_tmp_path)
+                except Exception as e:
+                    raise S3FailedDownloadError(checkpoint_filepath, e) from e
 
-            Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
-            logger.info("Successfully resumed from a bucket s3 checkpoint: %s", checkpoint_filepath)
-        finally:
-            with suppress(OSError):
-                os.remove(tmp_path)
+                src_tokenizer = WordTokenizer.from_pretrained(src_tmp_path)
+                tgt_tokenizer = WordTokenizer.from_pretrained(tgt_tmp_path)
+                logger.info(f"Successfully resumed tokenizers from a bucket s3 checkpoint: {bucket}")
+                return src_tokenizer, tgt_tokenizer
+            finally:
+                with suppress(OSError):
+                    os.remove(src_tmp_path)
+                    os.remove(tgt_tmp_path)
+
+        else:  # Download to_load to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                tmp_path = tmp.name
+            try:
+                try:
+                    s3.download_file(bucket, key, tmp_path)
+                except Exception as e:
+                    raise S3FailedDownloadError(checkpoint_filepath, e) from e
+
+                checkpoint = torch.load(tmp_path, map_location=device)
+
+                Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
+                logger.info(f"Successfully resumed training objects from a bucket s3 checkpoint: {checkpoint_filepath}")
+            finally:
+                with suppress(OSError):
+                    os.remove(tmp_path)
 
 
 def setup_output_dir(config: DictConfig | ListConfig, rank: int) -> str:
@@ -113,7 +153,7 @@ def setup_output_dir(config: DictConfig | ListConfig, rank: int) -> str:
     output_dir = config.output_dir
     if rank == 0:
         now = datetime.now().strftime("%Y%m%d-%H%M%S")
-        name = f"{now}-backend-{config.backend}-lr-{config.training_hp.optimizer_args.learning_rate}"
+        name = f"{now}-min_lr-{config.training_hp.lr_scheduler.min_lr}-max_lr-{config.training_hp.lr_scheduler.max_lr}"
         output_dir = os.path.join(config.output_dir, name)
         os.makedirs(output_dir, exist_ok=True)
 
@@ -142,12 +182,16 @@ def s3_upload(filepath: str, bucket: str, s3_key: str | None = None):
         raise
 
 
-def save_config(config: DictConfig | ListConfig, output_dir: str):
+def save_config(
+    config: DictConfig | ListConfig,
+    output_dir: str,
+    enable_ckpt: bool = True,
+):
     """Save configuration to config-lock.yaml for result reproducibility."""
     with open(f"{output_dir}/config-lock.yaml", "w+") as f:
         OmegaConf.save(config, f)
     # Upload to S3 endpoint
-    if config.s3_bucket_name is not None and config.exec_mode != "dummy":
+    if config.s3_bucket_name is not None and enable_ckpt:
         s3_upload(
             filepath=f"{output_dir}/config-lock.yaml",
             bucket=config.s3_bucket_name,
@@ -165,26 +209,6 @@ def log_metrics(engine: Engine, tag: str) -> None:
 
     metrics_format = f"{tag} [{engine.state.epoch}/{engine.state.iteration}]: {engine.state.metrics}"
     engine.logger.info(metrics_format)
-
-
-def setup_logging(config: DictConfig | ListConfig) -> Logger:
-    """Setup logger with `ignite.utils.setup_logger()`.
-
-    Args:
-        config (DictConfig | ListConfig): Config object. config has to contain `verbose` and `output_dir` attribute.
-
-    Returns:
-        Logger: n instance of `Logger`.
-    """
-
-    green = "\033[32m"
-    reset = "\033[0m"
-    logger = setup_logger(
-        name=f"{green}[ignite]{reset}",
-        level=logging.INFO,
-        filepath=os.path.join(config.output_dir, "training-info.log"),
-    )
-    return logger
 
 
 def setup_exp_logging(
@@ -221,6 +245,10 @@ def setup_exp_logging(
     if not return_all_loggers:
         return wandb_logger
 
+    os.environ["TRACKIO_DIR"] = (
+        config.output_dir + "/trackio"
+    )  # https://huggingface.co/docs/trackio/en/environment_variables#trackiodir
+
     trackio_logger = setup_trackio_logging(
         trainer,
         optimizers,
@@ -241,23 +269,23 @@ def setup_handlers(
     to_save_train: dict | None = None,
     to_save_test: dict | None = None,
     enable_ckpt: bool = True,
-) -> tuple[Checkpoint, Checkpoint]:
+) -> None:
     """Setup Ignite handlers."""
 
     if enable_ckpt and idist.get_rank() == 0:  # Setup checkpointing only on rank 0
         # Setup checkpoints savers
-
-        saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
+        disk_saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
         s3_saver = (
             S3Saver(bucket=config.s3_bucket_name, prefix=config.model_name + "/")
             if config.s3_bucket_name is not None
             else None
         )
 
-        # Local checkpointing during training
+        # Training checkpointing.
+        # Do it locally only if s3 checkpointing is disabled to save disk space in cloud instance.
         ckpt_handler_train = Checkpoint(
             to_save_train,
-            saver,
+            save_handler=s3_saver if config.s3_bucket_name is not None else disk_saver,
             filename_prefix=config.model_base_name,
             n_saved=config.checkpoints_retain_n,
         )
@@ -265,25 +293,16 @@ def setup_handlers(
             Events.ITERATION_COMPLETED(every=config.save_every_iters),
             ckpt_handler_train,
         )
+        trainer.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_train)
 
-        # Offsite training checkpointing
-        if config.s3_bucket_name is not None:
-            ckpt_handler_train_s3 = Checkpoint(
-                to_save_train,
-                s3_saver,
-                filename_prefix=config.model_base_name,
-                n_saved=config.checkpoints_retain_n,
-            )
-            trainer.add_event_handler(Events.ITERATION_COMPLETED(every=config.save_every_iters), ckpt_handler_train_s3)
-            trainer.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_train_s3)
-
-        # Local checkpointing during evaluation
+        # Evaluation checkpointing.
+        # Do it locally only if s3 checkpointing is disabled to save disk space in cloud instance.
         global_step_transform = None
         if to_save_train.get("trainer", None) is not None:
             global_step_transform = global_step_from_engine(to_save_train["trainer"])
         ckpt_handler_test = Checkpoint(
             to_save_test,
-            saver,
+            save_handler=s3_saver if config.s3_bucket_name is not None else disk_saver,
             filename_prefix="best",
             n_saved=config.checkpoints_retain_n,
             global_step_transform=global_step_transform,
@@ -291,19 +310,6 @@ def setup_handlers(
             score_function=Checkpoint.get_default_score_fn("Bleu"),
         )
         evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test)
-
-        # Offsite testing checkpointing
-        if config.s3_bucket_name is not None:
-            ckpt_handler_test_s3 = Checkpoint(
-                to_save_test,
-                s3_saver,
-                filename_prefix="best",
-                n_saved=config.checkpoints_retain_n,
-                global_step_transform=global_step_transform,
-                score_name="test_bleu",
-                score_function=Checkpoint.get_default_score_fn("Bleu"),
-            )
-            evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test_s3)
 
     # Early stopping
     def score_fn(engine: Engine):
@@ -327,10 +333,6 @@ def setup_handlers(
 
     if torch.cuda.is_available():
         GpuInfo().attach(trainer, name="gpu")
-
-    if not enable_ckpt:
-        return None, None
-    return ckpt_handler_train, ckpt_handler_test
 
 
 def nlp_metric_transform(
@@ -386,10 +388,50 @@ def loss_metric_transform(output: tuple[torch.Tensor, torch.Tensor]) -> tuple[to
     return output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1)
 
 
+def setup_lr_lambda_fn(config: DictConfig | ListConfig):
+    """Setup function that will govern learning rate scheduling.
+    Following the DeepSeek V3 [implementation](https://arxiv.org/abs/2412.19437) there have been considered 3 phases:
+    1. Warmup
+    2. Stable
+    3. Decay
+
+    # TODO Continue
+
+    Args:
+        config (DictConfig | ListConfig): Project config file.
+    """
+
+    min_lr = config.training_hp.lr_scheduler.min_lr
+    max_lr = config.training_hp.lr_scheduler.max_lr
+
+    total_iters = config.num_train_iters_per_epoch * config.training_hp.num_epochs
+    warmup_iters = config.training_hp.lr_scheduler.warmup_iters
+    stable_iters = config.training_hp.lr_scheduler.stable_iters_prop * total_iters - warmup_iters
+    decay_iters = total_iters - warmup_iters - stable_iters
+
+    def lr_lambda(step):
+        # Warmup phase
+        if step < warmup_iters:
+            return max_lr * (step / warmup_iters)
+
+        # Stable phase
+        elif step < stable_iters + warmup_iters:
+            return max_lr
+
+        # Decay phase
+        else:
+            step = step - warmup_iters - stable_iters
+            cosine_decay = 0.5 * (1 + math.cos(math.pi * step / decay_iters))
+            return min_lr + (max_lr - min_lr) * cosine_decay
+
+    return lr_lambda
+
+
 def setup_trainer(
     config: DictConfig | ListConfig,
     model: nn.Module,
     optimizer: Optimizer,
+    lr_scheduler: LRScheduler,
     loss_fn: nn.Module,
     device: torch.device,
     train_sampler: Sampler,
@@ -448,20 +490,14 @@ def setup_trainer(
             # tgt_output_label shape: [B*S]
             loss = loss_fn(output_logits.reshape(-1, output_logits.size(-1)), tgt_output_label.reshape(-1))
 
-        if scaler is not None:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
+        scaler.scale(loss).backward()
 
-        # Log gradient norm
-        total_norm = 0
-        for p in model.parameters():
-            param_norm = p.grad.detach().data.norm(2)
-            total_norm += param_norm.item() ** 2
-        engine.state.gradient_norm = total_norm ** (1 / 2)
+        if config.training_hp.max_gradient_norm > 0.0:  # Gradient clipping to stabilize training
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.training_hp.max_gradient_norm)
+
+        scaler.step(optimizer)
+        scaler.update()
+        lr_scheduler.step()
 
         metric = {
             "train_loss": loss.item(),
@@ -469,6 +505,7 @@ def setup_trainer(
             "tokens_seen_tgt_cum": getattr(engine.state, "tokens_seen_tgt", 0),
             "tokens_seen_tot_cum": getattr(engine.state, "tokens_seen_src", 0)
             + getattr(engine.state, "tokens_seen_tgt", 0),
+            # "gradient_norm": getattr(engine.state, "gradient_norm", 0)
         }
         engine.state.metrics = metric
 

@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import string
@@ -22,9 +23,22 @@ class VocabNotBuiltError(Exception):
         super().__init__(msg)
 
 
+class CheckpointEmptyVocabException(Exception):
+    def __init__(self, msg="The provided json file has an empty vocab."):
+        super().__init__(msg)
+
+
 class GloVeVersionError(Exception):
     def __init__(self, glove_version, glove_available_versions):
         msg = f"GloVe version is not available, got {glove_version}, available versions: {glove_available_versions}."
+        super().__init__(msg)
+
+
+class DatasetLanguagesNotAvailableError(Exception):
+    def __init__(self, src_lang, tgt_lang):
+        msg = (
+            f"Choosen languages are not available in dataset, got src_lang = '{src_lang}' and tgt_lang = '{tgt_lang}'."
+        )
         super().__init__(msg)
 
 
@@ -102,7 +116,7 @@ class WordTokenizer:
     Mainly used to let the model be compatible with pretrained GloVe embeddings.
 
     Args:
-        special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. SOS_TOKEN, EOS_TOKEN.
+        special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. SOS_TOKEN, EOS_TOKEN. Defaults to None.
         contractions (dict[str, str] | None, optional): Contractions to be considered, eg. 's, 'll . Defaults to None.
         num_workers (int, optional): Number of CPU threads to use in parallel operations, eg. token counting or GloVe token extraction. Defaults to 4.
         tokenizer_max_len (int, optional): Tokenizer max sequence length. Mainly used to limit memory usage and performance impact during training and inference due to attention quadratic complexity. Defaults to 128.
@@ -111,21 +125,25 @@ class WordTokenizer:
 
     def __init__(
         self,
-        special_tokens: dict[str, str],
+        special_tokens: dict[str, str] | None = None,
         contractions: dict[str, str] | None = None,
         num_workers: int = 4,
         tokenizer_max_len: int = 128,
         max_vocab_size: int = 100_000,
     ):
-        self.vocab: list[str] = []
-        self.token_to_idx: dict[str, int] = {}
-        self.idx_to_token: dict[int, str] = {}
+        self.vocab: dict[str, int] = {}
+        self.vocab_reverse: dict[int, str] = {}  # Useful for efficient decoding
 
         self.num_workers = num_workers
         self.tokenizer_max_len = tokenizer_max_len
         self.max_vocab_size = max_vocab_size
 
-        self.special_tokens = special_tokens
+        self.special_tokens = special_tokens or {
+            "sos_token": "<s>",
+            "eos_token": "</s>",
+            "pad_token": "<PAD>",
+            "unk_token": "<UNK>",
+        }
 
         self.contractions = contractions or {
             "'s": " 's",
@@ -152,23 +170,54 @@ class WordTokenizer:
 
     @property
     def vocab_size(self):
-        return len(self.vocab) if self.vocab else 0
+        return len(self.vocab.items()) if self.vocab else 0
 
     @property
     def sos_token_idx(self):
-        return self.token_to_idx.get(self.special_tokens["sos_token"], 0)
+        return self.vocab.get(self.special_tokens["sos_token"], 0)
 
     @property
     def eos_token_idx(self):
-        return self.token_to_idx.get(self.special_tokens["eos_token"], 1)
+        return self.vocab.get(self.special_tokens["eos_token"], 1)
 
     @property
     def pad_token_idx(self):
-        return self.token_to_idx.get(self.special_tokens["pad_token"], 2)
+        return self.vocab.get(self.special_tokens["pad_token"], 2)
 
     @property
     def unk_token_idx(self):
-        return self.token_to_idx.get(self.special_tokens["unk_token"], 3)
+        return self.vocab.get(self.special_tokens["unk_token"], 3)
+
+    @classmethod
+    def from_pretrained(cls: "WordTokenizer", path: str) -> "WordTokenizer":
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        if data.get("vocab") is None:
+            raise CheckpointEmptyVocabException()
+
+        tokenizer = cls()
+        tokenizer.vocab = data.get("vocab")
+        tokenizer.vocab_reverse = {idx: token for token, idx in tokenizer.vocab.items()}
+        tokenizer.special_tokens = data.get("special_tokens", {})
+        tokenizer.contractions = data.get("contractions", {})
+
+        print(tokenizer.sos_token_idx)
+
+        return tokenizer
+
+    def to_json(self, output_path: str) -> None:
+        if self.vocab_size == 0:
+            raise VocabNotBuiltError()
+
+        to_save = {
+            "special_tokens": self.special_tokens,
+            "contractions": self.contractions,
+            "vocab": self.vocab,
+        }
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(to_save, f, ensure_ascii=False, indent=2)
 
     def tokenize(self, text: str) -> list[str]:
         """Tokenizer based on GloVe word tokenizer in order to let the model be compatible with GloVe pretrained embeddings.
@@ -202,10 +251,6 @@ class WordTokenizer:
 
         return tokens[: self.tokenizer_max_len]
 
-    def from_pretrained(self):
-        # TODO
-        pass
-
     def build_vocab_parallel(
         self,
         tokens: list[str],
@@ -225,10 +270,10 @@ class WordTokenizer:
         Raises:
             GloVeVersionError: Raised when supplied glove_version is unavailable.
         """
-        vocab = []
-        vocab.extend(self.special_tokens.values())
+        vocab_list = []
+        vocab_list.extend(self.special_tokens.values())
         # Used for quick O(1) insertion of new tokens, instead of searching in the vocab list for each new token (O(n))
-        vocab_set = set(vocab)
+        vocab_set = set(vocab_list)
 
         if min_freq > 1:
             # Split tokens in chunks and assign them to CPU thread for parallel counting
@@ -251,14 +296,14 @@ class WordTokenizer:
                 if self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size):
                     vocab_set.add(token.lower())
 
-        vocab = list(vocab_set)
+        vocab_list = list(vocab_set)
         del vocab_set
 
         glove_tokens = []
 
         # Parallel GloVe loading
         if extend_with_glove and (
-            self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab) < self.max_vocab_size)
+            self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_list) < self.max_vocab_size)
         ):
             print("Extending vocab with GloVe tokens using parallel processing...")
 
@@ -286,29 +331,30 @@ class WordTokenizer:
                 for lst in lists:
                     glove_tokens.extend(lst)
 
-                initial_size = len(vocab)
+                initial_size = len(vocab_list)
                 if self.max_vocab_size != -1:
                     for tok in glove_tokens:
-                        if tok not in vocab:
-                            vocab.append(tok)
-                        if len(vocab) == self.max_vocab_size:
+                        if tok not in vocab_list:
+                            vocab_list.append(tok)
+                        if len(vocab_list) == self.max_vocab_size:
                             break
                 else:
-                    vocab.extend(glove_tokens)
-                    vocab = list(set(vocab))
+                    vocab_list.extend(glove_tokens)
+                    vocab_list = list(set(vocab_list))
 
-                print(f"Added {len(vocab) - initial_size} tokens from GloVe")
+                print(f"Added {len(vocab_list) - initial_size} tokens from GloVe")
 
             except Exception as e:
                 print(f"Error with GloVe processing: {e}")
                 raise
 
         # Create mappings
-        self.token_to_idx = {token: idx for idx, token in enumerate(vocab)}
-        self.idx_to_token = dict(enumerate(vocab))
-        self.vocab = vocab
+        self.vocab = {token: idx for idx, token in enumerate(vocab_list)}
+        self.vocab_reverse = dict(enumerate(vocab_list))
 
-        print(f"Built vocabulary with {len(vocab)} tokens.")
+        del vocab_list, glove_tokens
+
+        print(f"Built vocabulary with {len(self.vocab.items())} tokens.")
 
     def build_vocab(
         self,
@@ -329,9 +375,9 @@ class WordTokenizer:
         Raises:
             GloVeVersionError: Raised when supplied glove_version is unavailable.
         """
-        vocab = []
-        vocab.extend(self.special_tokens.values())
-        vocab_set = set(vocab)
+        vocab_list = []
+        vocab_list.extend(self.special_tokens.values())
+        vocab_set = set(vocab_list)
 
         if min_freq > 1:
             token_counts = Counter(tokens)
@@ -346,11 +392,11 @@ class WordTokenizer:
                 if self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size):
                     vocab_set.add(token.lower())
 
-        vocab = list(vocab_set)
+        vocab_list = list(vocab_set)
         del vocab_set
 
         if extend_with_glove and (
-            self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab) < self.max_vocab_size)
+            self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_list) < self.max_vocab_size)
         ):
             print("Extending vocab with GloVe tokens...")
 
@@ -371,28 +417,29 @@ class WordTokenizer:
                 # Using parse_glove_tokens function in order to avoid code duplication
                 glove_tokens = parse_glove_tokens(lines)
 
-                initial_size = len(vocab)
+                initial_size = len(vocab_list)
                 if self.max_vocab_size != -1:
                     for tok in glove_tokens:
-                        if tok not in vocab:
-                            vocab.append(tok)
-                        if len(vocab) == self.max_vocab_size:
+                        if tok not in vocab_list:
+                            vocab_list.append(tok)
+                        if len(vocab_list) == self.max_vocab_size:
                             break
                 else:
-                    vocab.extend(glove_tokens)
-                    vocab = list(set(vocab))
+                    vocab_list.extend(glove_tokens)
+                    vocab_list = list(set(vocab_list))
 
-                print(f"Added {len(vocab) - initial_size} tokens from GloVe")
+                print(f"Added {len(vocab_list) - initial_size} tokens from GloVe")
 
             except Exception as e:
                 print(f"Error with GloVe processing GloVe: {e}")
 
         # Create mappings
-        self.token_to_idx = {token: idx for idx, token in enumerate(vocab)}
-        self.idx_to_token = dict(enumerate(vocab))
-        self.vocab = vocab
+        self.vocab = {token: idx for idx, token in enumerate(vocab_list)}
+        self.vocab_reverse = dict(enumerate(vocab_list))
 
-        print(f"Built vocabulary with {len(vocab)} tokens.")
+        del vocab_list, glove_tokens
+
+        print(f"Built vocabulary with {len(self.vocab.items())} tokens.")
 
     def encode(
         self,
@@ -408,7 +455,7 @@ class WordTokenizer:
         Args:
             input_sequence (str | list[str] | np.ndarray | torch.Tensor): Sequence to be encoded or already encoded (useful in decoding stage when this method is only used to provide the mask).
             pad_to_len (int | None, optional): Sequence length to pad `input_sequence` with. Defaults to None.
-            return_only_mask (bool, optional). Return only attention mask. Defaults to False.
+            return_only_mask (bool, optional): Return only attention mask. Defaults to False.
 
         Raises:
             VocabNotBuiltError: Raised when vocabulary is not built.
@@ -438,7 +485,7 @@ class WordTokenizer:
         if tokens[-1] != self.special_tokens["eos_token"]:
             tokens.append(self.special_tokens["eos_token"])
 
-        token_ids = [self.token_to_idx.get(token, self.unk_token_idx) for token in tokens]
+        token_ids = [self.vocab.get(token, self.unk_token_idx) for token in tokens]
 
         if pad_to_len is not None:  # Pad sequence to pad_to_len
             pad_to_len += 2  # Considering SOS and EOS tokens
@@ -466,7 +513,7 @@ class WordTokenizer:
         """
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
-        return [self.idx_to_token.get(idx, self.special_tokens["unk_token"]) for idx in token_ids]
+        return [self.vocab_reverse.get(idx, self.special_tokens["unk_token"]) for idx in token_ids]
 
 
 class TranslationDataset(Dataset):
@@ -623,7 +670,7 @@ def batch_collate_fn(
 
 
 def build_data_utils(
-    config: DictConfig | ListConfig, return_all: bool = False
+    config: DictConfig | ListConfig, return_all: bool = False, **kwargs
 ) -> (
     tuple[DataLoader, DataLoader]
     | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, WordTokenizer, WordTokenizer]
@@ -646,6 +693,7 @@ def build_data_utils(
 
     data = load_dataset(config.dataset.dataset_id, config.dataset.dataset_name, cache_dir=config.cache_ds_path)["train"]
 
+    # TODO If resuming tokenizers from pretrained add check to ensure src and tgt languages matched between the provided config and the checkpoint one
     src_lang = config.dataset.src_lang
     tgt_lang = config.dataset.tgt_lang
 
@@ -657,10 +705,13 @@ def build_data_utils(
     train_data = split["train"]
     test_data = split["test"]
 
-    train_src_texts = [text[src_lang] for text in train_data["translation"]]
-    train_tgt_texts = [text[tgt_lang] for text in train_data["translation"]]
-    test_src_texts = [text[src_lang] for text in test_data["translation"]]
-    test_tgt_texts = [text[tgt_lang] for text in test_data["translation"]]
+    try:
+        train_src_texts = [text[src_lang] for text in train_data["translation"]]
+        train_tgt_texts = [text[tgt_lang] for text in train_data["translation"]]
+        test_src_texts = [text[src_lang] for text in test_data["translation"]]
+        test_tgt_texts = [text[tgt_lang] for text in test_data["translation"]]
+    except KeyError as err:
+        raise DatasetLanguagesNotAvailableError(src_lang, tgt_lang) from err
 
     # Build tokenizers and vocabs. Both src and tgt tokenizers vocabs are built using the training data
     special_tokens = {
@@ -670,37 +721,43 @@ def build_data_utils(
         "unk_token": config.tokenizer.unk_token,
     }
 
-    src_tokenizer = WordTokenizer(
-        special_tokens,
-        num_workers=config.tokenizer.num_workers,
-        tokenizer_max_len=config.tokenizer.max_seq_len,
-        max_vocab_size=config.tokenizer.max_vocab_size,
-    )
-    tgt_tokenizer = WordTokenizer(
-        special_tokens,
-        num_workers=config.tokenizer.num_workers,
-        tokenizer_max_len=config.tokenizer.max_seq_len,
-        max_vocab_size=config.tokenizer.max_vocab_size,
-    )
+    # Get tokenizers from pretrained
+    if "src_tokenizer" in kwargs and "tgt_tokenizer" in kwargs:
+        src_tokenizer, tgt_tokenizer = kwargs.get("src_tokenizer"), kwargs.get("tgt_tokenizer")
 
-    # To build the vocabularies texts are not filtered based on tokenizer.max_sequence_length
-    src_tokens = [token for text in train_src_texts for token in src_tokenizer.tokenize(text)]
-    tgt_tokens = [token for text in train_tgt_texts for token in tgt_tokenizer.tokenize(text)]
+    else:
+        src_tokenizer = WordTokenizer(
+            special_tokens,
+            num_workers=config.tokenizer.num_workers,
+            tokenizer_max_len=config.tokenizer.max_seq_len,
+            max_vocab_size=config.tokenizer.max_vocab_size,
+        )
+        tgt_tokenizer = WordTokenizer(
+            special_tokens,
+            num_workers=config.tokenizer.num_workers,
+            tokenizer_max_len=config.tokenizer.max_seq_len,
+            max_vocab_size=config.tokenizer.max_vocab_size,
+        )
 
-    src_tokenizer.build_vocab_parallel(
-        src_tokens,
-        min_freq=config.tokenizer.vocab_min_freq,
-        extend_with_glove=bool(
-            src_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"
-        ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
-        glove_version=config.model_configs[config.chosen_model_size].glove_version,
-    )
-    tgt_tokenizer.build_vocab_parallel(
-        tgt_tokens,
-        min_freq=config.tokenizer.vocab_min_freq,
-        extend_with_glove=bool(tgt_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"),
-        glove_version=config.model_configs[config.chosen_model_size].glove_version,
-    )
+        # To build the vocabularies texts are not filtered based on tokenizer.max_sequence_length
+        src_tokens = [token for text in train_src_texts for token in src_tokenizer.tokenize(text)]
+        tgt_tokens = [token for text in train_tgt_texts for token in tgt_tokenizer.tokenize(text)]
+
+        # NOTE Building vocabularies only if tokenizers are initialized from scratch
+        src_tokenizer.build_vocab_parallel(
+            src_tokens,
+            min_freq=config.tokenizer.vocab_min_freq,
+            extend_with_glove=bool(
+                src_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"
+            ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
+            glove_version=config.model_configs[config.chosen_model_size].glove_version,
+        )
+        tgt_tokenizer.build_vocab_parallel(
+            tgt_tokens,
+            min_freq=config.tokenizer.vocab_min_freq,
+            extend_with_glove=bool(tgt_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"),
+            glove_version=config.model_configs[config.chosen_model_size].glove_version,
+        )
 
     config.tokenizer.src_sos_token_idx = src_tokenizer.sos_token_idx
     config.tokenizer.src_eos_token_idx = src_tokenizer.eos_token_idx
@@ -749,6 +806,8 @@ def build_data_utils(
         shuffle=config.train_dataloader.shuffle,
         drop_last=config.train_dataloader.drop_last,
         persistent_workers=True,  # If True, the data loader will not shut down the worker processes after a dataset has been consumed once. This allows to maintain the workers Dataset instances alive
+        pin_memory=True,
+        prefetch_factor=config.train_dataloader.prefetch_factor,
     )
     test_dataloader = idist.auto_dataloader(
         test_dataset,
@@ -762,6 +821,8 @@ def build_data_utils(
         shuffle=config.test_dataloader.shuffle,
         drop_last=config.test_dataloader.drop_last,
         persistent_workers=True,
+        pin_memory=True,
+        prefetch_factor=config.train_dataloader.prefetch_factor,
     )
 
     print(f"Train dataloader length: {len(train_dataloader)}")
