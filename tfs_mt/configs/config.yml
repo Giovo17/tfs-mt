@@ -1,7 +1,8 @@
 seed: 42
 
-log_every_iters: 2_000
-save_every_iters: 20_000  # Only used for training, testing checkpoints will be saved whenever each epoch ends.
+log_every_iters: 4_000
+save_every_iters: 10_000  # Only used for training, testing checkpoints will be saved whenever each epoch ends.
+eval_every_iters: 10_000
 update_pbar_every_iters: 100
 checkpoints_retain_n: 5  # The number of checkpoints that will be saved are double the specified number, one half will come from training and the other from testing
 time_limit_sec: -1
@@ -46,13 +47,8 @@ model_configs:
 
 
 training_hp:
-  num_epochs: 2
-  num_warmup_epochs: 1
-  load_checkpoint:
-    load_full_checkpoint: False
-    load_model_only: False
-    load_checkpoint_path: None
-  distributed_training: True
+  num_epochs: 5
+  distributed_training: False
   use_amp: True
 
   loss_type: crossentropy
@@ -60,13 +56,21 @@ training_hp:
 
   early_stopping_patience: 5
 
-  optimizer_type: adamw
-  optimizer_args:
-    learning_rate: 5e-2
+  max_gradient_norm: 1.0  # Set to 0.0 to avoid gradient clipping
+
+  optimizer:
+    type: adamw
     weight_decay: 1e-3
+    # As reported in the Attention is all you need paper (Page 7)
     beta1: 0.9
-    beta2: 0.999
-    eps: 1e-8
+    beta2: 0.98
+    eps: 1e-9
+
+  lr_scheduler:
+    min_lr: 1e-2
+    max_lr: 8e-2
+    warmup_iters: 2_000
+    stable_iters_prop: 0.8
 
 tokenizer:
   sos_token: "<s>"
@@ -76,25 +80,27 @@ tokenizer:
   max_seq_len: 256
   max_vocab_size: 70_000
   vocab_min_freq: 2
-  num_workers: 4
+  num_workers: 4  # Used for multithread vocabulary building
 
 dataset:
   dataset_task: machine-translation
   dataset_id: "Helsinki-NLP/europarl"
   dataset_name: "en-it"
-  train_split: 0.8
+  train_split: 0.95
   src_lang: "en"
   tgt_lang: "it"
   max_len: -1
 
 train_dataloader:
-  batch_size: 128
+  batch_size: 64
   num_workers: 8
   shuffle: True
   drop_last: True
+  prefetch_factor: 2
 
 test_dataloader:
   batch_size: 128
   num_workers: 8
   shuffle: False
   drop_last: False
+  prefetch_factor: 2
