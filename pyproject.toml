@@ -22,7 +22,7 @@ dependencies = [
     "datasets>=4.0.0",
     "jaxtyping>=0.3.3",
     "omegaconf>=2.3.0",
-    "pytorch-ignite>=0.5.2",
+    "pytorch-ignite>=0.5.3",
     "pyyaml>=6.0.2",
     "requests>=2.32.4",
     "tdqm>=0.0.1",
@@ -39,7 +39,7 @@ Documentation = "https://giovo17.github.io/tfs-mt/"
 [dependency-groups]
 dev = [
     "pytest>=8.4.1",
-    "prek>=0.2.4",
+    "prek>=0.2.9",
     "tox-uv>=1.26.2",
     "mypy>=1.17",
     "ruff>=0.12.7",
