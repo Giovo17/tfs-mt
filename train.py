@@ -38,6 +38,7 @@ from tfs_mt.training_utils import (
     resume_from_ckpt,
     s3_upload,
     save_config,
+    setup_early_stopping,
     setup_evaluator,
     setup_exp_logging,
     setup_handlers,
@@ -47,7 +48,8 @@ from tfs_mt.training_utils import (
 )
 
 load_dotenv()
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+# os.environ["TORCHINDUCTOR_DISABLE_CUDAGRAPH"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # remove tokenizer parallelism warning
 
 
@@ -64,8 +66,8 @@ if torch.cuda.is_available():
 wandb_api_key = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_API_KEY"] = wandb_api_key
 
-config_path = os.path.join(os.getcwd(), "tfs_mt/configs/config.yml")
 base_path = os.getcwd()
+config_path = os.path.join(base_path, "tfs_mt/configs/config.yml")
 output_dir = os.path.join(base_path, "data/output")
 cache_ds_path = os.path.join(base_path, "data")
 time_limit_sec = -1
@@ -101,9 +103,13 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     logger.info("Configuration: \n%s", pformat(config))
 
     # Resume tokenizer from pretrained and build data utils
-    if config.ckpt_path_to_resume_from is not None:
+    if config.ckpt_path_to_resume_from is not None or config.tokenizers_resume_path is not None:
         src_tokenizer, tgt_tokenizer = resume_from_ckpt(
-            config.ckpt_path_to_resume_from, logger=logger, resume_tokenizers=True
+            checkpoint_path=config.ckpt_path_to_resume_from
+            if config.ckpt_path_to_resume_from is not None
+            else config.tokenizers_resume_path,
+            logger=logger,
+            resume_tokenizers=True,
         )
         print("Tokenizers restored from pretrained.")
         train_dataloader, test_dataloader = build_data_utils(
@@ -116,13 +122,13 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
         )
 
     # Save tokenizers
-    src_tokenizer.to_json(config.output_dir + "/src_tokenizer.json")
-    tgt_tokenizer.to_json(config.output_dir + "/tgt_tokenizer.json")
+    src_tokenizer.to_json(config.output_dir + f"/src_tokenizer_{config.tokenizer.type}.json")
+    tgt_tokenizer.to_json(config.output_dir + f"/tgt_tokenizer_{config.tokenizer.type}.json")
     if config.s3_bucket_name is not None and enable_log_ckpt:
         s3_upload(
-            filepath=config.output_dir + "/src_tokenizer.json",
+            filepath=config.output_dir + f"/src_tokenizer_{config.tokenizer.type}.json",
             bucket=config.s3_bucket_name,
-            s3_key=f"{config.model_name}/src_tokenizer.json",
+            s3_key=f"{config.model_name}/src_tokenizer_{config.tokenizer.type}.json",
         )
         s3_upload(
             filepath=config.output_dir + "/tgt_tokenizer.json",
@@ -148,16 +154,15 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     init_model = build_model(config, src_tokenizer, tgt_tokenizer)
     if torch.cuda.is_available():
         init_model = torch.compile(init_model, mode="max-autotune")
-    try:
-        logger.info(
-            summary(
-                init_model,
-                [(16, 128), (16, 128), (16, 128), (16, 128)],
-                dtypes=[torch.long, torch.long, torch.bool, torch.bool],
-            )
+
+    logger.info(
+        summary(
+            init_model,
+            [(16, 128), (16, 128), (16, 128), (16, 128)],
+            dtypes=[torch.long, torch.long, torch.bool, torch.bool],
         )
-    except RuntimeError:
-        logger.info(f"Total number of parameters: {sum(p.numel() for p in init_model.parameters())}")
+    )
+    logger.info(f"Total number of parameters: {sum(p.numel() for p in init_model.parameters()) / 1e6:.2f} M")
 
     # Get model ready for multigpu training if available and move the model to current device
     model = idist.auto_model(init_model)
@@ -169,7 +174,7 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     model_param_groups = get_param_groups(model, config.training_hp.optimizer.weight_decay)
     init_optimizer = AdamW(
         model_param_groups,
-        lr=config.training_hp.lr_scheduler.min_lr,
+        lr=1,  # This way the learning rate values will be entirely managed by the learning rate scheduler
         betas=(config.training_hp.optimizer.beta1, config.training_hp.optimizer.beta2),
     )
     optimizer = idist.auto_optim(init_optimizer)  # Get optimizer ready for multigpu training if available
@@ -259,6 +264,8 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     @trainer.on(Events.STARTED)
     def run_test_eval_on_start():
         test_evaluator.run(test_dataloader)
+        # Attach early stopping to test_evaluator here cause it rely on evaluator metrics dict to be defined and it is not empty after first run
+        setup_early_stopping(trainer, test_evaluator, config)
 
     # Decode a sequence to debug training
     @test_evaluator.on(Events.EPOCH_COMPLETED(every=1))
@@ -335,10 +342,24 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Transformer training arguments")
     parser.add_argument(
         "-e",
-        "--exec_mode",
+        "--exec-mode",
         choices=["dev", "dummy"],
         default="dev",
-        help="Execution mode: 'dev' or 'dummy' (default: dev)",
+        help="""
+        Execution mode: 'dev' or 'dummy' (default: dev).
+        Dev: train the model in developer way, all training features are enabled.
+        Dummy: debug model training, this disables distributed training, experiment tracking and checkpointing.
+        """,
+    )
+    parser.add_argument(
+        "-s",
+        "--size",
+        choices=["nano", "small", "base"],
+        default="nano",
+        help="""
+        Model size: 'nano', 'small' or 'base' (default: nano).
+        Refer to configs/config.yml file for more info on sizes.
+        """,
     )
     return parser.parse_args()
 
@@ -368,7 +389,7 @@ if __name__ == "__main__":
     config.base_path = base_path
     config.output_dir = output_dir
     config.cache_ds_path = cache_ds_path
-    config.chosen_model_size = "nano"  # nano, small, base
+    config.chosen_model_size = args.size
     config.time_limit_sec = time_limit_sec
     config.wandb_organization = os.getenv("WANDB_ORGANIZATION")
 

@@ -11,6 +11,10 @@ s3_bucket_name: tfs-mt-checkpoints  # Set to null to disable s3 checkpointing
 # If null training will start from scratch
 ckpt_path_to_resume_from: null  #s3://bucket-name/path/to/checkpoint.pt or filesystem path
 
+# It takes only the folder/bucket path and searches for src_tokenizer_{type}.json and tgt_tokenizer_{type}.json files
+# Will be ignored if ckpt_path_to_resume_from is not null
+tokenizers_resume_path: null  #s3://bucket-name/ or filesystem path
+
 model_base_name: tfs_mt
 
 model_parameters:
@@ -29,21 +33,21 @@ model_configs:
     glove_version: "glove.2024.wikigiga.50d"
     glove_filename: "wiki_giga_2024_50_MFT20_vectors_seed_123_alpha_0.75_eta_0.075_combined"
   small:
-    num_encoder_layers: 5
-    num_decoder_layers: 5
+    num_encoder_layers: 6
+    num_decoder_layers: 6
     d_model: 100
     num_heads: 6
     d_ff: 400
     glove_version: "glove.2024.wikigiga.100d"
     glove_filename: "wiki_giga_2024_100_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05.050_combined"
   base:
-    num_encoder_layers: 6
-    num_decoder_layers: 6
-    d_model: 200
+    num_encoder_layers: 8
+    num_decoder_layers: 8
+    d_model: 300
     num_heads: 8
     d_ff: 800
-    glove_version: "glove.2024.wikigiga.200d"
-    glove_filename: "wiki_giga_2024_200_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05_combined"
+    glove_version: "glove.2024.wikigiga.300d"
+    glove_filename: "wiki_giga_2024_300_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05_combined"
 
 
 training_hp:
@@ -54,25 +58,28 @@ training_hp:
   loss_type: crossentropy
   loss_label_smoothing: 0.1
 
-  early_stopping_patience: 5
+  early_stopping:
+    patience: 10_000  # Number of iterations to wait if no improvement and then stop the training.
+    min_delta: 5e-4
 
   max_gradient_norm: 1.0  # Set to 0.0 to avoid gradient clipping
 
   optimizer:
     type: adamw
-    weight_decay: 1e-3
+    weight_decay: 1e-4
     # As reported in the Attention is all you need paper (Page 7)
     beta1: 0.9
-    beta2: 0.98
-    eps: 1e-9
+    beta2: 0.999
+    eps: 1e-8
 
   lr_scheduler:
-    min_lr: 1e-2
-    max_lr: 8e-2
-    warmup_iters: 2_000
+    min_lr: 1e-5
+    max_lr: 7e-5
+    warmup_iters: 8_000
     stable_iters_prop: 0.8
 
 tokenizer:
+  type: "word"  # [word, bpe]  GloVe pretrained embeddings require word tokenization
   sos_token: "<s>"
   eos_token: "</s>"
   pad_token: "<PAD>"
@@ -80,7 +87,6 @@ tokenizer:
   max_seq_len: 256
   max_vocab_size: 70_000
   vocab_min_freq: 2
-  num_workers: 4  # Used for multithread vocabulary building
 
 dataset:
   dataset_task: machine-translation
@@ -92,14 +98,14 @@ dataset:
   max_len: -1
 
 train_dataloader:
-  batch_size: 64
+  batch_size: 48
   num_workers: 8
   shuffle: True
   drop_last: True
   prefetch_factor: 2
 
 test_dataloader:
-  batch_size: 128
+  batch_size: 100
   num_workers: 8
   shuffle: False
   drop_last: False

@@ -32,8 +32,8 @@ from .ignite_custom_utils.wandb_logger import WandBLogger
 
 
 class CheckpointNotFoundError(Exception):
-    def __init__(self, checkpoint_filepath):
-        msg = f"Given {checkpoint_filepath!s} does not exist."
+    def __init__(self, checkpoint_path):
+        msg = f"Given {checkpoint_path!s} does not exist."
         super().__init__(msg)
 
 
@@ -43,29 +43,31 @@ class InvalidCheckpointS3PathError(Exception):
 
 
 class S3FailedDownloadError(Exception):
-    def __init__(self, checkpoint_filepath, e):
-        msg = f"Failed to download checkpoint from S3 ({checkpoint_filepath!s}): {e!s}"
+    def __init__(self, checkpoint_path, e):
+        msg = f"Failed to download checkpoint from S3 ({checkpoint_path!s}): {e!s}"
         super().__init__(msg)
 
 
 def resume_from_ckpt(
-    checkpoint_filepath: str,
+    checkpoint_path: str,
     to_load: Mapping | None = None,
     device: torch.device | None = None,
     logger: Logger | None = None,
     strict: bool = True,
     resume_tokenizers: bool = False,
+    tokenizers_type: str | None = None,
 ) -> None | tuple[WordTokenizer, WordTokenizer]:
     """Loads state dict from a checkpoint file to resume the training or loads tokenizers.
     It supports loading from local or bucket s3 checkpoint.
 
     Args:
-        checkpoint_filepath (str): Path to the checkpoint file in S3 bucket or in filesystem.
+        checkpoint_path (str): Path to the checkpoint file (or folder) in S3 bucket or in filesystem.
         to_load (Mapping | None, optional): A dictionary with objects.. Defaults to None.
         device (torch.device | None, optional): Device. Defaults to None.
         logger (Logger | None, optional): To log info about resuming from a checkpoint. Defaults to None.
         strict (bool, optional): Whether to strictly enforce that the keys in `state_dict` match the keys returned by this module's `state_dict()` function. Defaults to True.
         resume_tokenizers (bool, optional): Whether to load only tokenizers. Defaults to False.
+        tokenizers_type (str, optional): Tokenizers type (Word, BPE).
 
     Raises:
         CheckpointNotFoundError: Raised when checkpoint file doesn't exist.
@@ -77,33 +79,38 @@ def resume_from_ckpt(
     """
 
     resume_method = "local"
-    if checkpoint_filepath.startswith("s3://"):
+    if checkpoint_path.startswith("s3://"):
         resume_method = "bucket-s3"
 
     if resume_method == "local":
-        if not os.path.isfile(checkpoint_filepath):
-            raise CheckpointNotFoundError(checkpoint_filepath)
+        if not os.path.isfile(checkpoint_path):
+            raise CheckpointNotFoundError(checkpoint_path)
 
         if resume_tokenizers:
-            ckpt_basepath = "/".join(checkpoint_filepath.split("/")[:-1])
-            src_tokenizer = WordTokenizer.from_pretrained(ckpt_basepath + "/src_tokenizer.json")
-            tgt_tokenizer = WordTokenizer.from_pretrained(ckpt_basepath + "/tgt_tokenizer.json")
+            # Detect if the function checkpoint_path is the folder/bucket path or the pt export filepath
+            ckpt_basepath = (
+                "/".join(checkpoint_path.split("/")[:-1])
+                if checkpoint_path.endswith((".pt", ".pth"))
+                else checkpoint_path
+            )
+            src_tokenizer = WordTokenizer.from_pretrained(ckpt_basepath + f"/src_tokenizer_{tokenizers_type}.json")
+            tgt_tokenizer = WordTokenizer.from_pretrained(ckpt_basepath + f"/tgt_tokenizer_{tokenizers_type}.json")
             return src_tokenizer, tgt_tokenizer
 
-        checkpoint = torch.load(checkpoint_filepath, map_location=device)
+        checkpoint = torch.load(checkpoint_path, map_location=device)
 
         Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
-        logger.info("Successfully resumed from a local checkpoint: %s", checkpoint_filepath)
+        logger.info("Successfully resumed from a local checkpoint: %s", checkpoint_path)
 
     else:  # resume_method == "bucket-s3":
-        _, _, path = checkpoint_filepath.partition("s3://")
+        _, _, path = checkpoint_path.partition("s3://")
         bucket, _, key = path.partition("/")
 
         if bucket == "" or key == "":
             raise InvalidCheckpointS3PathError()
 
-        src_tokenizer_key = key.split("/")[0] + "/src_tokenizer.json" if resume_tokenizers else None
-        tgt_tokenizer_key = key.split("/")[0] + "/tgt_tokenizer.json" if resume_tokenizers else None
+        src_tokenizer_key = key.split("/")[0] + f"/src_tokenizer_{tokenizers_type}.json" if resume_tokenizers else None
+        tgt_tokenizer_key = key.split("/")[0] + f"/tgt_tokenizer_{tokenizers_type}.json" if resume_tokenizers else None
 
         s3 = S3Saver._make_s3_client()
 
@@ -119,7 +126,7 @@ def resume_from_ckpt(
                     s3.download_file(bucket, src_tokenizer_key, src_tmp_path)
                     s3.download_file(bucket, tgt_tokenizer_key, tgt_tmp_path)
                 except Exception as e:
-                    raise S3FailedDownloadError(checkpoint_filepath, e) from e
+                    raise S3FailedDownloadError(checkpoint_path, e) from e
 
                 src_tokenizer = WordTokenizer.from_pretrained(src_tmp_path)
                 tgt_tokenizer = WordTokenizer.from_pretrained(tgt_tmp_path)
@@ -137,12 +144,12 @@ def resume_from_ckpt(
                 try:
                     s3.download_file(bucket, key, tmp_path)
                 except Exception as e:
-                    raise S3FailedDownloadError(checkpoint_filepath, e) from e
+                    raise S3FailedDownloadError(checkpoint_path, e) from e
 
                 checkpoint = torch.load(tmp_path, map_location=device)
 
                 Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
-                logger.info(f"Successfully resumed training objects from a bucket s3 checkpoint: {checkpoint_filepath}")
+                logger.info(f"Successfully resumed training objects from a bucket s3 checkpoint: {checkpoint_path}")
             finally:
                 with suppress(OSError):
                     os.remove(tmp_path)
@@ -311,13 +318,6 @@ def setup_handlers(
         )
         evaluator.add_event_handler(Events.EPOCH_COMPLETED(every=1), ckpt_handler_test)
 
-    # Early stopping
-    def score_fn(engine: Engine):
-        return engine.state.metrics["Bleu"]
-
-    es = EarlyStopping(config.training_hp.early_stopping_patience, score_fn, trainer)
-    evaluator.add_event_handler(Events.EPOCH_COMPLETED, es)
-
     # Time limit reached policy to stop training. Mainly used in Kaggle due to 12 hours run limit.
     if config.time_limit_sec != -1:
         print(f"Setting up training time limit to {int(config.time_limit_sec) / 3600} hours.")
@@ -333,6 +333,25 @@ def setup_handlers(
 
     if torch.cuda.is_available():
         GpuInfo().attach(trainer, name="gpu")
+
+
+def setup_early_stopping(
+    trainer: Engine,
+    evaluator: Engine,
+    config: DictConfig | ListConfig,
+) -> None:
+    """Setup early stopping."""
+
+    def score_fn(engine: Engine):
+        return engine.state.metrics["Bleu"]
+
+    es = EarlyStopping(
+        patience=config.training_hp.early_stopping.patience,  # Considered in number of iterations
+        score_function=score_fn,
+        trainer=trainer,
+        min_delta=config.training_hp.early_stopping.min_delta,
+    )
+    evaluator.add_event_handler(Events.ITERATION_COMPLETED, es)
 
 
 def nlp_metric_transform(
@@ -431,7 +450,7 @@ def setup_lr_lambda_fn(config: DictConfig | ListConfig):
     def lr_lambda(step):
         # Warmup phase
         if step < warmup_iters:
-            return max_lr * (step / warmup_iters)
+            return max_lr * ((step + 1) / warmup_iters)
 
         # Stable phase
         elif step < stable_iters + warmup_iters:
