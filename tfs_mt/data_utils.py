@@ -3,9 +3,10 @@ import os
 import re
 import string
 import zipfile
+from abc import ABC, abstractmethod
 from collections import Counter
 from functools import partial
-from multiprocessing import Pool
+from itertools import chain
 
 import ignite.distributed as idist
 import numpy as np
@@ -42,15 +43,61 @@ class DatasetLanguagesNotAvailableError(Exception):
         super().__init__(msg)
 
 
-def chunkify(input_list: list[str], n: int) -> list[str]:
-    """Split list into n nearly equal parts."""
-    k, m = divmod(len(input_list), n)
-    return [input_list[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n)]
+class BaseTokenizer(ABC):
+    @property
+    @abstractmethod
+    def vocab_size(self):
+        pass
 
+    @property
+    @abstractmethod
+    def sos_token_idx(self):
+        pass
 
-def count_tokens_chunk(chunk: list[str]) -> Counter:
-    """Count tokens in one chunk."""
-    return Counter(chunk)
+    @property
+    @abstractmethod
+    def eos_token_idx(self):
+        pass
+
+    @property
+    @abstractmethod
+    def pad_token_idx(self):
+        pass
+
+    @property
+    @abstractmethod
+    def unk_token_idx(self):
+        pass
+
+    @abstractmethod
+    def build_vocab(self) -> None:
+        pass
+
+    @classmethod
+    @abstractmethod
+    def from_pretrained(cls, path: str):
+        pass
+
+    @abstractmethod
+    def to_json(self, path: str) -> None:
+        pass
+
+    @abstractmethod
+    def tokenize(self, text: str) -> list[str]:
+        pass
+
+    @abstractmethod
+    def encode(
+        self,
+        input_sequence: str | list[str] | np.ndarray | torch.Tensor,
+        pad_to_len: int | None = None,
+        return_only_mask: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        pass
+
+    @abstractmethod
+    def decode(self, tokens: list[int] | np.ndarray) -> list[str]:
+        pass
 
 
 def parse_glove_tokens(lines: list[str]) -> list[str]:
@@ -111,14 +158,13 @@ def download_glove(output_dir: str, glove_version: str = "glove.2024.wikigiga.50
     return glove_filepath
 
 
-class WordTokenizer:
+class WordTokenizer(BaseTokenizer):
     """Word tokenizer.
     Mainly used to let the model be compatible with pretrained GloVe embeddings.
 
     Args:
         special_tokens (dict[str, str] | None, optional): Special tokens to be considered, eg. SOS_TOKEN, EOS_TOKEN. Defaults to None.
-        contractions (dict[str, str] | None, optional): Contractions to be considered, eg. 's, 'll . Defaults to None.
-        num_workers (int, optional): Number of CPU threads to use in parallel operations, eg. token counting or GloVe token extraction. Defaults to 4.
+        contractions (list[str] | None, optional): Contractions to be considered, eg. 's, 'll. If None the following set of contractions will be considered: `'s`, `'re`, `'ve`, `'m`, `'ll`, `'d`, `n't`, `'t`, `n'ts`. Defaults to None.
         tokenizer_max_len (int, optional): Tokenizer max sequence length. Mainly used to limit memory usage and performance impact during training and inference due to attention quadratic complexity. Defaults to 128.
         max_vocab_size (int, optional): Maximum number of token in vocabulary. Defaults to 100_000.
     """
@@ -126,15 +172,13 @@ class WordTokenizer:
     def __init__(
         self,
         special_tokens: dict[str, str] | None = None,
-        contractions: dict[str, str] | None = None,
-        num_workers: int = 4,
+        contractions: list[str, str] | None = None,
         tokenizer_max_len: int = 128,
         max_vocab_size: int = 100_000,
     ):
         self.vocab: dict[str, int] = {}
         self.vocab_reverse: dict[int, str] = {}  # Useful for efficient decoding
 
-        self.num_workers = num_workers
         self.tokenizer_max_len = tokenizer_max_len
         self.max_vocab_size = max_vocab_size
 
@@ -145,16 +189,35 @@ class WordTokenizer:
             "unk_token": "<UNK>",
         }
 
-        self.contractions = contractions or {
-            "'s": " 's",
-            "'t": " 't",
-            "'re": " 're",
-            "'ve": " 've",
-            "'m": " 'm",
-            "'ll": " 'll",
-            "'d": " 'd",
-            "n't": " n't",
-        }
+        # Setup contractions management utilities
+        contractions_init = contractions or ["'s", "'re", "'ve", "'m", "'ll", "'d", "n't", "'t", "n'ts"]
+
+        # Prepare a dict of the following type to address the detection of nested contractions:
+        # nested_contractions_dict = {
+        #     "ANYTHING_n't_ANYTHING": ["n't"],
+        #     "n't": ["'t"]
+        # }
+        # NOTE "'t" is technically a sub contraction of both "ANYTHING_n't_ANYTHING" and "n't" but it will be only considered as sub contraction of n't
+        self.nested_contractions_dict: dict[str, list[str]] = {}
+
+        for contraction in contractions_init:
+            other_contractions = contractions_init.copy()
+            other_contractions.remove(contraction)
+            for comp_contraction in other_contractions:
+                if contraction in comp_contraction:  # Detect sub contraction
+                    # Create new mapping in dict
+                    if comp_contraction not in self.nested_contractions_dict:
+                        self.nested_contractions_dict[comp_contraction] = [contraction]
+                    # Detect sub contraction already present in the dict
+                    elif comp_contraction in self.nested_contractions_dict and contraction not in list(
+                        chain.from_iterable(self.nested_contractions_dict.values())
+                    ):  # Merge all elements in sub contractions lists in a single list
+                        self.nested_contractions_dict[comp_contraction].append(contraction)
+
+        # Final sets of sub contractions and non-nested contractions
+        # NOTE the plain list of all sub contractions will be used during tokenizationin order to better detect correct splitting when the `'` is encountered
+        self.all_sub_contractions = list(chain.from_iterable(self.nested_contractions_dict.values()))
+        self.contractions = [c for c in contractions_init if c not in self.all_sub_contractions]
 
         self.glove_available_versions = [
             "glove.2024.dolma.300d",
@@ -211,6 +274,7 @@ class WordTokenizer:
             raise VocabNotBuiltError()
 
         to_save = {
+            "type": "WordTokenizer",
             "special_tokens": self.special_tokens,
             "contractions": self.contractions,
             "vocab": self.vocab,
@@ -218,143 +282,6 @@ class WordTokenizer:
 
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(to_save, f, ensure_ascii=False, indent=2)
-
-    def tokenize(self, text: str) -> list[str]:
-        """Tokenizer based on GloVe word tokenizer in order to let the model be compatible with GloVe pretrained embeddings.
-
-        Max word length is 1000. Contractions are treated as distinct tokens, eg. `n't`, `'s`, `'ll`.
-
-        Reference: [GloVe source code](https://github.com/stanfordnlp/GloVe/blob/master/src/common.c#L75)
-
-        Args:
-            text (str): text to be tokenized.
-
-        Returns:
-            List[str]: List of string tokens from text.
-        """
-
-        text = text.strip().lower()
-
-        for contraction, replacement in self.contractions.items():
-            pattern = r"([a-zA-Z]+)" + re.escape(contraction) + r"\b"
-            text = re.sub(pattern, r"\1" + replacement, text)
-
-        words = text.split()
-
-        tokens = []
-        for word in words:
-            if word and word[-1] in string.punctuation:
-                tokens.append(word[:-1])
-                tokens.append(word[-1])
-            else:
-                tokens.append(word)
-
-        return tokens[: self.tokenizer_max_len]
-
-    def build_vocab_parallel(
-        self,
-        tokens: list[str],
-        min_freq: int = 2,
-        extend_with_glove: bool = False,
-        glove_version: str = "glove.2024.wikigiga.50d",
-        **kwargs,
-    ) -> None:
-        """Build vocabulary method. Uses multithreading execution to speed up the computation.
-
-        Args:
-            tokens (list[str]): Tokens from dataset to build vocabulary on.
-            min_freq (int, optional): Minimum number of times a token has to appear in the dataset to be included in the vocabulary. Defaults to 2.
-            extend_with_glove (bool, optional): Enable vocabulary extension with GloVe tokens. Defaults to False.
-            glove_version (str, optional): GloVe version to use if `extend_with_glove` is `True`. Defaults to "glove.2024.wikigiga.50d".
-
-        Raises:
-            GloVeVersionError: Raised when supplied glove_version is unavailable.
-        """
-        vocab_list = []
-        vocab_list.extend(self.special_tokens.values())
-        # Used for quick O(1) insertion of new tokens, instead of searching in the vocab list for each new token (O(n))
-        vocab_set = set(vocab_list)
-
-        if min_freq > 1:
-            # Split tokens in chunks and assign them to CPU thread for parallel counting
-            with Pool(self.num_workers) as pool:
-                counts_list = pool.map(count_tokens_chunk, chunkify(tokens, self.num_workers))
-
-            # Merge counters
-            token_counts = Counter()
-            for c in counts_list:
-                token_counts.update(c)
-
-            for token, count in token_counts.items():
-                # len(vocab_set) is O(1) operation cause the length is stored as a set attribute
-                if (count >= min_freq and self.max_vocab_size == -1) or (
-                    count >= min_freq and self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size
-                ):
-                    vocab_set.add(token.lower())
-        else:
-            for token in tokens:
-                if self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_set) < self.max_vocab_size):
-                    vocab_set.add(token.lower())
-
-        vocab_list = list(vocab_set)
-        del vocab_set
-
-        glove_tokens = []
-
-        # Parallel GloVe loading
-        if extend_with_glove and (
-            self.max_vocab_size == -1 or (self.max_vocab_size > 0 and len(vocab_list) < self.max_vocab_size)
-        ):
-            print("Extending vocab with GloVe tokens using parallel processing...")
-
-            if glove_version not in self.glove_available_versions:
-                raise GloVeVersionError(glove_version, self.glove_available_versions)
-
-            data_path = os.getcwd() + "/data" if "data_path" not in kwargs else kwargs["data_path"]
-
-            glove_tokens = []
-
-            try:
-                glove_filepath = download_glove(data_path, glove_version)
-
-                print(f"Loading GloVe {glove_version} embeddings in parallel...")
-
-                with open(glove_filepath, encoding="utf-8") as f:
-                    lines = f.readlines()
-
-                # Split GloVe file lines into chunks and assign them to CPU threads
-                line_chunks = list(chunkify(lines, self.num_workers))
-                with Pool(self.num_workers) as pool:
-                    lists = pool.map(parse_glove_tokens, line_chunks)
-
-                # Merge results from each workers
-                for lst in lists:
-                    glove_tokens.extend(lst)
-
-                initial_size = len(vocab_list)
-                if self.max_vocab_size != -1:
-                    for tok in glove_tokens:
-                        if tok not in vocab_list:
-                            vocab_list.append(tok)
-                        if len(vocab_list) == self.max_vocab_size:
-                            break
-                else:
-                    vocab_list.extend(glove_tokens)
-                    vocab_list = list(set(vocab_list))
-
-                print(f"Added {len(vocab_list) - initial_size} tokens from GloVe")
-
-            except Exception as e:
-                print(f"Error with GloVe processing: {e}")
-                raise
-
-        # Create mappings
-        self.vocab = {token: idx for idx, token in enumerate(vocab_list)}
-        self.vocab_reverse = dict(enumerate(vocab_list))
-
-        del vocab_list, glove_tokens
-
-        print(f"Built vocabulary with {len(self.vocab.items())} tokens.")
 
     def build_vocab(
         self,
@@ -414,8 +341,17 @@ class WordTokenizer:
 
                 with open(glove_filepath, encoding="utf-8") as f:
                     lines = f.readlines()
-                # Using parse_glove_tokens function in order to avoid code duplication
-                glove_tokens = parse_glove_tokens(lines)
+
+                # Parse GloVe tokens
+                for line in lines:
+                    parts = line.strip().split()
+                    try:
+                        float(parts[1])
+                    except ValueError:
+                        continue
+                    else:
+                        token = parts[0].lower()
+                        glove_tokens.append(token)
 
                 initial_size = len(vocab_list)
                 if self.max_vocab_size != -1:
@@ -437,9 +373,75 @@ class WordTokenizer:
         self.vocab = {token: idx for idx, token in enumerate(vocab_list)}
         self.vocab_reverse = dict(enumerate(vocab_list))
 
-        del vocab_list, glove_tokens
+        del vocab_list
 
         print(f"Built vocabulary with {len(self.vocab.items())} tokens.")
+
+    def tokenize(self, text: str) -> list[str]:
+        """Tokenizer based on GloVe word tokenizer in order to let the model be compatible with GloVe pretrained embeddings.
+
+        Max word length is 1000. Contractions are treated as distinct tokens, eg. `n't`, `'s`, `'ll`.
+
+        Reference: [GloVe source code](https://github.com/stanfordnlp/GloVe/blob/master/src/common.c#L75)
+
+        Args:
+            text (str): text to be tokenized.
+
+        Returns:
+            list[str]: List of string tokens from text.
+        """
+
+        text = text.strip().lower()
+
+        for contraction in self.contractions:
+            pattern = r"([a-zA-Z]+)" + re.escape(contraction) + r"\b"
+            text = re.sub(pattern, r"\1 " + contraction, text)
+
+        for complete_contraction, sub_list in self.nested_contractions_dict.items():
+            pattern = r"([a-zA-Z]+)" + re.escape(complete_contraction) + r"\b"
+            if not re.compile(complete_contraction).search(text):
+                for sub_contraction in sub_list:
+                    pattern = r"([a-zA-Z]+)" + re.escape(sub_contraction) + r"\b"
+                    text = re.sub(pattern, r"\1 " + sub_contraction, text)
+            else:
+                text = re.sub(pattern, r"\1 " + complete_contraction, text)
+
+        words = text.split()
+
+        tokens = []
+        for word in words:
+            # Split words when encountering a `'` that's not involved in a quote or a contraction.
+            # eg. "Quell'ultimo" gets splitted into "Quell'" and "ultimo"
+            if (
+                "'" in word
+                and word[0] != "'"
+                and word[-1] != "'"
+                and word not in self.contractions
+                and word not in self.all_sub_contractions
+            ):
+                parts = word.split("'")
+                for i, part in enumerate(parts):
+                    if part:
+                        if i < len(parts) - 1:
+                            part += "'"
+                        tokens.append(part)
+
+            # Handle trailing punctuation
+            elif word and word[-1] in string.punctuation and word[-1] != "'":
+                # Strip all trailing punctuation
+                core_word = word.rstrip(string.punctuation)
+                punct = word[len(core_word) :]
+                if core_word:
+                    tokens.append(core_word)
+                for p in punct:
+                    tokens.append(p)
+
+            else:
+                if word:
+                    tokens.append(word)
+
+        # Truncate sequences by default
+        return tokens[: self.tokenizer_max_len]
 
     def encode(
         self,
@@ -516,14 +518,18 @@ class WordTokenizer:
         return [self.vocab_reverse.get(idx, self.special_tokens["unk_token"]) for idx in token_ids]
 
 
+class BPETokenizer(BaseTokenizer):
+    pass
+
+
 class TranslationDataset(Dataset):
     """Translation Dataset.
 
     Args:
         src_texts (list[str]): List of source texts.
         tgt_texts (list[str]): List of target texts.
-        src_tokenizer (WordTokenizer): Tokenizer used to preprocess the source language text.
-        tgt_tokenizer (WordTokenizer): Tokenizer used to preprocess the target language text.
+        src_tokenizer (BaseTokenizer): Tokenizer used to preprocess the source language text.
+        tgt_tokenizer (BaseTokenizer): Tokenizer used to preprocess the target language text.
         src_lang (str): Identifier for the source language, e.g., `"en"` for English.
         tgt_lang (str): Identifier for the target language, e.g., `"it"` for Italian.
         max_sequence_length (int | None, optional): Maximum sequence length for tokenization. If None, sequences are not truncated. Defaults to None.
@@ -533,8 +539,8 @@ class TranslationDataset(Dataset):
         self,
         src_texts: list[str],
         tgt_texts: list[str],
-        src_tokenizer: WordTokenizer,
-        tgt_tokenizer: WordTokenizer,
+        src_tokenizer: BaseTokenizer,
+        tgt_tokenizer: BaseTokenizer,
         src_lang: str,
         tgt_lang: str,
         max_sequence_length: int | None = None,
@@ -546,23 +552,7 @@ class TranslationDataset(Dataset):
         self.tgt_lang = tgt_lang
         self.max_sequence_length = max_sequence_length
 
-        # Filter input data excluding texts longer than max_sequence_length
-        if max_sequence_length > 0:
-            print(f"Max sequence length set to {max_sequence_length}.")
-            self.src_texts, self.tgt_texts = [], []
-            for src_text, tgt_text in zip(src_texts, tgt_texts, strict=False):
-                if (
-                    len(src_tokenizer.tokenize(src_text)) > max_sequence_length - 2
-                ):  # -2 accounts for SOS and EOS tokens that will be added in the __getitem__ method
-                    continue
-                if len(tgt_tokenizer.tokenize(tgt_text)) > max_sequence_length - 2:
-                    continue
-                self.src_texts.append(src_text)
-                self.tgt_texts.append(tgt_text)
-        else:
-            self.src_texts = src_texts
-            self.tgt_texts = tgt_texts
-
+        # Build tokenizers vocab if empty
         if self.src_tokenizer.vocab_size == 0 or self.tgt_tokenizer.vocab_size == 0:
             if "extend_vocab_with_glove" in kwargs and "glove_version" in kwargs:
                 self._build_vocabs(
@@ -573,6 +563,49 @@ class TranslationDataset(Dataset):
             else:
                 self._build_vocabs(kwargs.get("vocab_min_freq", 2))
 
+        # Filter input data excluding texts longer than max_sequence_length
+        if max_sequence_length > 0:
+            print(f"Max sequence length set to {max_sequence_length}.")
+            self.src_texts, self.tgt_texts = [], []
+        else:
+            self.src_texts = src_texts
+            self.tgt_texts = tgt_texts
+
+        # Prepare tokenized texts here to have them ready in __getitem__ method
+        # This will speed up the batch preparation in the dataloader but it will raise system memory usage since the tokenized sequences are cached as dataset attribute
+        # (The masks are also cached but their impact is negligible since they are arrays of boolean values)
+        print("Caching encoded sequences in memory, this may take some time...")
+        self.src_encoded_sequences, self.tgt_encoded_sequences = [], []
+        self.src_masks, self.tgt_masks = [], []
+        for src_text, tgt_text in zip(src_texts, tgt_texts, strict=False):
+            src_text_tokenized = src_tokenizer.tokenize(src_text)
+            tgt_text_tokenized = tgt_tokenizer.tokenize(tgt_text)
+
+            # Exclude sequences that exceed max_sequence_length
+            if max_sequence_length > 0:
+                if (
+                    len(src_text_tokenized) > max_sequence_length - 2
+                ):  # -2 accounts for SOS and EOS tokens that will be added in the __getitem__ method
+                    continue
+                if len(tgt_text_tokenized) > max_sequence_length - 2:
+                    continue
+                self.src_texts.append(src_text)
+                self.tgt_texts.append(tgt_text)
+
+            # src and tgt sequence lengths must be the same to properly compute cross attention
+            # The smaller sequence will be padded to the length of the longer sequence
+            # Attention mask ensure no attention is computed with pad tokens
+            max_seq_len = max(len(src_text_tokenized), len(tgt_text_tokenized))
+
+            # Tokenize texts
+            src_tokens, src_mask = self.src_tokenizer.encode(src_text_tokenized, pad_to_len=max_seq_len)
+            tgt_tokens, tgt_mask = self.tgt_tokenizer.encode(tgt_text_tokenized, pad_to_len=max_seq_len)
+
+            self.src_encoded_sequences.append(src_tokens)
+            self.tgt_encoded_sequences.append(tgt_tokens)
+            self.src_masks.append(src_mask)
+            self.tgt_masks.append(tgt_mask)
+
     def _build_vocabs(self, vocab_min_freq: int = 2, extend_with_glove: bool = False, **kwargs) -> None:
         """Build vocabularies for tokenizers."""
 
@@ -582,7 +615,7 @@ class TranslationDataset(Dataset):
         src_tokens = [token for text in self.src_texts for token in self.src_tokenizer.tokenize(text)]
         tgt_tokens = [token for text in self.tgt_texts for token in self.tgt_tokenizer.tokenize(text)]
 
-        self.src_tokenizer.build_vocab_parallel(
+        self.src_tokenizer.build_vocab(
             src_tokens,
             min_freq=vocab_min_freq,
             extend_with_glove=bool(
@@ -590,7 +623,7 @@ class TranslationDataset(Dataset):
             ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
             glove_version=kwargs.get("glove_version", "glove.2024.wikigiga.50d"),
         )
-        self.tgt_tokenizer.build_vocab_parallel(
+        self.tgt_tokenizer.build_vocab(
             tgt_tokens,
             min_freq=vocab_min_freq,
             extend_with_glove=bool(extend_with_glove and self.tgt_lang == "en"),
@@ -601,20 +634,12 @@ class TranslationDataset(Dataset):
         return len(self.src_texts)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor | str]:
+        src_tokens = self.src_encoded_sequences[idx]
+        tgt_tokens = self.tgt_encoded_sequences[idx]
+        src_mask = self.src_masks[idx]
+        tgt_mask = self.tgt_masks[idx]
         src_text = self.src_texts[idx]
         tgt_text = self.tgt_texts[idx]
-
-        src_text_tokenized = self.src_tokenizer.tokenize(src_text)
-        tgt_text_tokenized = self.tgt_tokenizer.tokenize(tgt_text)
-
-        # src and tgt sequence lengths must be the same to properly compute cross attention
-        # The smaller sequence will be padded to the length of the longer sequence
-        # Attention mask ensure no attention is computed with pad tokens
-        max_seq_len = max(len(src_text_tokenized), len(tgt_text_tokenized))
-
-        # Tokenize texts
-        src_tokens, src_mask = self.src_tokenizer.encode(src_text_tokenized, pad_to_len=max_seq_len)
-        tgt_tokens, tgt_mask = self.tgt_tokenizer.encode(tgt_text_tokenized, pad_to_len=max_seq_len)
 
         return {
             "src": torch.tensor(src_tokens, dtype=torch.long),
@@ -673,7 +698,7 @@ def build_data_utils(
     config: DictConfig | ListConfig, return_all: bool = False, **kwargs
 ) -> (
     tuple[DataLoader, DataLoader]
-    | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, WordTokenizer, WordTokenizer]
+    | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, BaseTokenizer, BaseTokenizer]
 ):
     """Build tokenizers, datasets and dataloaders for Machine Translation.
     Designed to support torch ignite distributed training.
@@ -683,7 +708,7 @@ def build_data_utils(
         return_all (bool, optional): Whether to return dataloaders, datasets and tokenizers. Defaults to False.
 
     Returns:
-        tuple[DataLoader, DataLoader] | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, WordTokenizer, WordTokenizer]: Dataloaders or dataloaders, datasets and tokenizers.
+        tuple[DataLoader, DataLoader] | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, BaseTokenizer, BaseTokenizer]: Dataloaders or dataloaders, datasets and tokenizers.
     """
 
     if config.training_hp.distributed_training:
@@ -701,16 +726,21 @@ def build_data_utils(
     if config.dataset.max_len != -1:
         data = data.select(range(config.dataset.max_len))
 
-    split = data.train_test_split(train_size=config.dataset.train_split, seed=config.seed)
+    print(f"Train test splitting - {config.dataset.train_split}/{1 - float(config.dataset.train_split):.2f}")
+    split = data.train_test_split(train_size=config.dataset.train_split, seed=config.seed, shuffle=False)
     train_data = split["train"]
     test_data = split["test"]
 
     try:
-        train_src_texts = [text[src_lang] for text in train_data["translation"]]
-        train_tgt_texts = [text[tgt_lang] for text in train_data["translation"]]
-        test_src_texts = [text[src_lang] for text in test_data["translation"]]
-        test_tgt_texts = [text[tgt_lang] for text in test_data["translation"]]
-    except KeyError as err:
+        train_src_texts, train_tgt_texts = [], []
+        for text in train_data["translation"]:
+            train_src_texts.append(text[src_lang])
+            train_tgt_texts.append(text[tgt_lang])
+        test_src_texts, test_tgt_texts = [], []
+        for text in test_data["translation"]:
+            test_src_texts.append(text[src_lang])
+            test_tgt_texts.append(text[tgt_lang])
+    except KeyError as err:  # Mainly here to ensure consistency when resuming model checkpoint
         raise DatasetLanguagesNotAvailableError(src_lang, tgt_lang) from err
 
     # Build tokenizers and vocabs. Both src and tgt tokenizers vocabs are built using the training data
@@ -726,15 +756,14 @@ def build_data_utils(
         src_tokenizer, tgt_tokenizer = kwargs.get("src_tokenizer"), kwargs.get("tgt_tokenizer")
 
     else:
-        src_tokenizer = WordTokenizer(
+        tok_types_dict = {"word": WordTokenizer, "bpe": BPETokenizer}
+        src_tokenizer = tok_types_dict[config.tokenizer.type](
             special_tokens,
-            num_workers=config.tokenizer.num_workers,
             tokenizer_max_len=config.tokenizer.max_seq_len,
             max_vocab_size=config.tokenizer.max_vocab_size,
         )
-        tgt_tokenizer = WordTokenizer(
+        tgt_tokenizer = tok_types_dict[config.tokenizer.type](
             special_tokens,
-            num_workers=config.tokenizer.num_workers,
             tokenizer_max_len=config.tokenizer.max_seq_len,
             max_vocab_size=config.tokenizer.max_vocab_size,
         )
@@ -743,21 +772,27 @@ def build_data_utils(
         src_tokens = [token for text in train_src_texts for token in src_tokenizer.tokenize(text)]
         tgt_tokens = [token for text in train_tgt_texts for token in tgt_tokenizer.tokenize(text)]
 
-        # NOTE Building vocabularies only if tokenizers are initialized from scratch
-        src_tokenizer.build_vocab_parallel(
-            src_tokens,
-            min_freq=config.tokenizer.vocab_min_freq,
-            extend_with_glove=bool(
-                src_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"
-            ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
-            glove_version=config.model_configs[config.chosen_model_size].glove_version,
-        )
-        tgt_tokenizer.build_vocab_parallel(
-            tgt_tokens,
-            min_freq=config.tokenizer.vocab_min_freq,
-            extend_with_glove=bool(tgt_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"),
-            glove_version=config.model_configs[config.chosen_model_size].glove_version,
-        )
+        # BPE Tokenizer
+        if config.tokenizer.type == "bpe":
+            # TODO BPE should take all available text in order to extract statistics
+            # and the tokenize method can be done only if the vocabulary is built
+            src_tokenizer.build_vocab(src_tokens)
+            tgt_tokenizer.build_vocab(tgt_tokens)
+        else:
+            src_tokenizer.build_vocab(
+                src_tokens,
+                min_freq=config.tokenizer.vocab_min_freq,
+                extend_with_glove=bool(
+                    src_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"
+                ),  # GloVe is trained on english only datasets so it doesn't make sense to extend non english vocabs
+                glove_version=config.model_configs[config.chosen_model_size].glove_version,
+            )
+            tgt_tokenizer.build_vocab(
+                tgt_tokens,
+                min_freq=config.tokenizer.vocab_min_freq,
+                extend_with_glove=bool(tgt_lang == "en" and config.model_configs.pretrained_word_embeddings == "GloVe"),
+                glove_version=config.model_configs[config.chosen_model_size].glove_version,
+            )
 
     config.tokenizer.src_sos_token_idx = src_tokenizer.sos_token_idx
     config.tokenizer.src_eos_token_idx = src_tokenizer.eos_token_idx
