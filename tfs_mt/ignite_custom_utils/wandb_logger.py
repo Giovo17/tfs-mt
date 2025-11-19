@@ -1,8 +1,18 @@
-"""WandB logger and its helper handlers."""
+# Ignite WandB custom logger
+#
+# Author: Giovanni Spadaro - https://giovannispadaro.it
+# Project: https://github.com/Giovo17/tfs-mt
+# Documentation: https://giovo17.github.io/tfs-mt
+#
+# Copyright (c) Giovanni Spadaro.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
 
 from collections.abc import Callable
 from typing import Any
 
+import torch.nn as nn
 from ignite.engine import Engine, Events
 from ignite.handlers.base_logger import BaseLogger, BaseOptimizerParamsHandler, BaseOutputHandler
 from ignite.handlers.utils import global_step_from_engine
@@ -144,6 +154,9 @@ class WandBLogger(BaseLogger):
 
     def __getattr__(self, attr: Any) -> Any:
         return getattr(self._wandb, attr)
+
+    def watch(self, model: nn.Module) -> None:
+        self._wandb.watch(model)
 
     def close(self) -> None:
         self._wandb.finish()

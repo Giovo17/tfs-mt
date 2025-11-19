@@ -1,3 +1,14 @@
+# Ignite trackio logger
+#
+# Author: Giovanni Spadaro - https://giovannispadaro.it
+# Project: https://github.com/Giovo17/tfs-mt
+# Documentation: https://giovo17.github.io/tfs-mt
+#
+# Copyright (c) Giovanni Spadaro.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
+
 from collections.abc import Callable
 from typing import Any
 
