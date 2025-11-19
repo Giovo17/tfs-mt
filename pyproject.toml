@@ -27,6 +27,7 @@ dependencies = [
     "requests>=2.32.4",
     "tdqm>=0.0.1",
     "torch>=2.9.0",
+    "transformers>=4.57.1",
     "types-pyyaml>=6.0.12.20250822",
     "types-requests>=2.32.4.20250809",
 ]
@@ -57,8 +58,10 @@ dev = [
     "nbformat>=5.10.4",
     "boto3>=1.40.36",
     "pynvml<12",
-    "trackio>=0.5.3",
+    "trackio>=0.9.1",
     "moto>=5.1.14",
+    "mkdocs-bibtex>=4.4.0",
+    "mkdocs-glightbox>=0.5.2",
 ]
 
 [build-system]

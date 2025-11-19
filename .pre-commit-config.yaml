@@ -22,7 +22,7 @@ repos:
         types_or: [ python, pyi ]
         args:
           - --fix
-          - --ignore=C901,RUF002,E712,TRY003,F722
+          - --ignore=C901,RUF002,E712,TRY003,F722,TRY301
       # Run the formatter excluding ipynb.
       - id: ruff-format
         types_or: [ python, pyi ]
