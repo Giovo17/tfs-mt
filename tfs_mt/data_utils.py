@@ -699,26 +699,18 @@ def batch_collate_fn(
     for key in keys:
         field_data = [sample[key] for sample in batch]
 
-        # sample batch dict = {
-        #     "src": torch.Tensor(),
-        #     "tgt": torch.Tensor(),
-        #     "src_mask": torch.BoolTensor(),
-        #     "tgt_mask": torch.BoolTensor(),
-        #     "src_text": list[str],
-        #     "tgt_text": list[str]
-        # }
         if isinstance(field_data[0], torch.Tensor):
-            if pad_all_to_len != -1:
-                num_padding_values = pad_all_to_len - field_data[0].shape[0]
-                if num_padding_values >= 0:
-                    field_data[0] = F.pad(field_data[0], (0, num_padding_values), value=0)
-
             if key == "src":
                 pad_token_id = src_pad_token_id
             elif key == "tgt":
                 pad_token_id = tgt_pad_token_id
             else:  # mask tensors
                 pad_token_id = 0  # will be replaced with False
+
+            if pad_all_to_len != -1:
+                num_padding_values = pad_all_to_len - field_data[0].shape[0]
+                if num_padding_values >= 0:
+                    field_data[0] = F.pad(field_data[0], (0, num_padding_values), value=pad_token_id)
 
             padded_seq = pad_sequence(field_data, batch_first=True, padding_value=pad_token_id)
             result[key] = padded_seq
