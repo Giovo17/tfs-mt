@@ -4,7 +4,10 @@
 # Project: https://github.com/Giovo17/tfs-mt
 # Documentation: https://giovo17.github.io/tfs-mt
 #
-# This script is licensed under the license found in the LICENSE file in the root directory of this source tree.
+# Copyright (c) Giovanni Spadaro.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
 
 import argparse
 import gc
@@ -14,7 +17,6 @@ from datetime import datetime
 from functools import partial
 from pprint import pformat
 
-import ignite.distributed as idist
 import torch
 from dotenv import load_dotenv
 from ignite.engine import Events
@@ -31,6 +33,8 @@ from tfs_mt.architecture import build_model
 from tfs_mt.data_utils import build_data_utils
 from tfs_mt.decoding_utils import greedy_decoding
 from tfs_mt.training_utils import (
+    LabelSmoothingLoss,
+    get_device,
     get_param_groups,
     log_metrics,
     loss_metric_transform,
@@ -57,20 +61,32 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"  # remove tokenizer parallelism w
 activities = [ProfilerActivity.CPU]
 
 if torch.cuda.is_available():
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # Consider if the batches aren't aligned with the same sequence length.
+    # If so, when compiling the model CUDA creates separate cudagraphs for each different input shape.
+    # Set to True to avoid this overhead when having batched of different input lengths.
+    # Set to False to create cudagraphs and get speedup, but ensure the batches have all the same sequence length to avoid cudagraph recomputation overhead.
+    # NOTE The best solution may be in the middle:
+    #   First of all extract K different sequence lengths such that a good samples clusterization is achieved.
+    #   (good is referred in terms of how similar, in terms of how long they are, sequences inside the cluster and how dissimilar the clusters are)
+    #   When collating batches the samples inside have to be in the same previously assigned cluster and the batch-assigned padding sequence length has to be the cluster max sequence length.
+    #   This way the number of different sequence length reduces drastically and few cudagraphs can be created (so the following option has to be set to False).
+    #   This approach is demanded to future development.
+    # Current approach:
+    #   Set tokenizer max sequence length to the max sequence length encountered in training data
+    #   Pad to tokenizer max sequence length
+    #   Compile unique cudagraph
+    torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = False
+
+    # Allow matmul with FP32 precision to leverage NVIDIA tensor cores. More here: https://docs.pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices
+    torch.backends.fp32_precision = "ieee"
+    torch.backends.cuda.matmul.fp32_precision = "ieee"
+    torch.backends.cudnn.fp32_precision = "ieee"
     torch.backends.cudnn.benchmark = True
     activities += [ProfilerActivity.CUDA]
 
 
 wandb_api_key = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_API_KEY"] = wandb_api_key
-
-base_path = os.getcwd()
-config_path = os.path.join(base_path, "tfs_mt/configs/config.yml")
-output_dir = os.path.join(base_path, "data/output")
-cache_ds_path = os.path.join(base_path, "data")
-time_limit_sec = -1
 
 
 class TooManyWarmupItersError(Exception):
@@ -80,23 +96,11 @@ class TooManyWarmupItersError(Exception):
         super().__init__(msg)
 
 
-def run(local_rank, config, distributed=False, enable_log_ckpt=True):
-    if distributed:
-        rank = idist.get_rank()
-        manual_seed(config.seed + rank)
-        output_dir = setup_output_dir(config, rank)
-        config.output_dir = output_dir
-
-        idist.barrier()
-
-        if rank == 0:
-            save_config(config, output_dir, enable_ckpt=enable_log_ckpt)
-    else:
-        rank = 0
-        manual_seed(config.seed)
-        output_dir = setup_output_dir(config, 0)
-        config.output_dir = output_dir
-        save_config(config, config.output_dir, enable_ckpt=enable_log_ckpt)
+def run(config, enable_log_ckpt=True):
+    manual_seed(config.seed)
+    output_dir = setup_output_dir(config)
+    config.output_dir = output_dir
+    save_config(config, config.output_dir, enable_ckpt=enable_log_ckpt)
 
     # Setup logger
     logger = setup_logger(level=logging.INFO, filepath=os.path.join(config.output_dir, "training-info.log"))
@@ -110,8 +114,8 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
             else config.tokenizers_resume_path,
             logger=logger,
             resume_tokenizers=True,
+            tokenizers_type=config.tokenizer.type,
         )
-        print("Tokenizers restored from pretrained.")
         train_dataloader, test_dataloader = build_data_utils(
             config, src_tokenizer=src_tokenizer, tgt_tokenizer=tgt_tokenizer
         )
@@ -131,13 +135,21 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
             s3_key=f"{config.model_name}/src_tokenizer_{config.tokenizer.type}.json",
         )
         s3_upload(
-            filepath=config.output_dir + "/tgt_tokenizer.json",
+            filepath=config.output_dir + f"/tgt_tokenizer_{config.tokenizer.type}.json",
             bucket=config.s3_bucket_name,
-            s3_key=f"{config.model_name}/tgt_tokenizer.json",
+            s3_key=f"{config.model_name}/tgt_tokenizer_{config.tokenizer.type}.json",
         )
-        print(f"Uploaded tokenizers to s3://{config.s3_bucket_name}")
+        logger.info(f"Uploaded tokenizers to s3://{config.s3_bucket_name}")
+
+    config.src_tokenizer_vocab_size = src_tokenizer.vocab_size
+    config.tgt_tokenizer_vocab_size = tgt_tokenizer.vocab_size
+    logger.info(f"Vocabulary size of source tokenizer: {config.src_tokenizer_vocab_size}")
+    logger.info(f"Vocabulary size of target tokenizer: {config.tgt_tokenizer_vocab_size}")
 
     config.num_train_iters_per_epoch = len(train_dataloader)
+    config.num_test_iters_per_epoch = len(test_dataloader)
+    logger.info(f"Number of train iterations per epoch: {config.num_train_iters_per_epoch}")
+    logger.info(f"Number of test iterations per epoch: {config.num_test_iters_per_epoch}")
 
     # Raise exception if warmup iterations are more than 50% of total iterations
     if (
@@ -150,44 +162,52 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
         )
 
     # Initialize model, optimizer, loss function, device or resume from checkpoint
-    device = idist.device()
-    init_model = build_model(config, src_tokenizer, tgt_tokenizer)
+    device = get_device()
+    logger.info(f"Using device: {device}")
+
+    model = build_model(config, src_tokenizer, tgt_tokenizer)
+    model.to(device)
     if torch.cuda.is_available():
-        init_model = torch.compile(init_model, mode="max-autotune")
+        model = torch.compile(model, mode=config.training_hp.torch_compile_mode)
 
     logger.info(
         summary(
-            init_model,
+            model,
             [(16, 128), (16, 128), (16, 128), (16, 128)],
             dtypes=[torch.long, torch.long, torch.bool, torch.bool],
         )
     )
-    logger.info(f"Total number of parameters: {sum(p.numel() for p in init_model.parameters()) / 1e6:.2f} M")
+    logger.info(f"Total number of parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M")
 
-    # Get model ready for multigpu training if available and move the model to current device
-    model = idist.auto_model(init_model)
+    model_param_groups = get_param_groups(model.named_parameters(), config.training_hp.optimizer.weight_decay)
 
-    if distributed:
-        config.training_hp.lr_scheduler.min_lr *= idist.get_world_size()
-        config.training_hp.lr_scheduler.max_lr *= idist.get_world_size()
-
-    model_param_groups = get_param_groups(model, config.training_hp.optimizer.weight_decay)
-    init_optimizer = AdamW(
+    optim_type = {"AdamW": AdamW}
+    optimizer = optim_type[config.training_hp.optimizer.type](
         model_param_groups,
         lr=1,  # This way the learning rate values will be entirely managed by the learning rate scheduler
         betas=(config.training_hp.optimizer.beta1, config.training_hp.optimizer.beta2),
     )
-    optimizer = idist.auto_optim(init_optimizer)  # Get optimizer ready for multigpu training if available
 
-    loss_fn = CrossEntropyLoss(
-        # Ignore padding tokens in loss computation
-        ignore_index=tgt_tokenizer.pad_token_idx,
-        # This will average the loss over batch_size * sequence_length (pad tokens don't contribute to sequence_length)
-        reduction="mean",
-        # During training, we employed label smoothing of value 0.1 (Attention is all you need page 8)
-        # This reduces overconfidence and improves generalization
-        label_smoothing=config.training_hp.loss_label_smoothing,
-    ).to(device=device)
+    if config.training_hp.loss.type == "crossentropy":
+        loss_fn = CrossEntropyLoss(
+            # Ignore padding tokens in loss computation
+            ignore_index=tgt_tokenizer.pad_token_idx,
+            # This will average the loss over batch_size * sequence_length (pad tokens don't contribute to sequence_length)
+            reduction="sum",  # The loss will be manually averaged by the number of processed tokens
+            # During training, we employed label smoothing of value 0.1 (Attention is all you need page 8)
+            # This reduces overconfidence and improves generalization
+            label_smoothing=config.training_hp.loss.label_smoothing,
+        ).to(device=device)
+
+    elif config.training_hp.loss.type == "KLdiv-labelsmoothing":
+        loss_fn = LabelSmoothingLoss(
+            vocab_size=tgt_tokenizer.vocab_size,
+            padding_idx=tgt_tokenizer.pad_token_idx,
+            smoothing=config.training_hp.loss.label_smoothing,
+        ).to(device=device)
+
+    else:
+        raise ValueError(f"Invalid loss type, got {config.training_hp.loss.type}")
 
     # Initialize learning rate scheduler
     lr_lambda = setup_lr_lambda_fn(config)
@@ -206,15 +226,16 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
             multiref="best",
             output_transform=partial(nlp_metric_transform, tgt_tokenizer=tgt_tokenizer),
         ),
-        "Loss": Loss(loss_fn, output_transform=loss_metric_transform),
+        "Loss": Loss(loss_fn, output_transform=partial(loss_metric_transform, loss_type=config.training_hp.loss.type)),
     }
 
     # Setup trainer and evaluator
     trainer = setup_trainer(config, model, optimizer, lr_scheduler, loss_fn, device, train_dataloader.sampler)
-    train_evaluator, test_evaluator = setup_evaluator(config, model, metrics, device)
+    test_evaluator = setup_evaluator(config, model, metrics, device)
 
     # Setup engines logger with python logging print training configurations
-    trainer.logger = train_evaluator.logger = test_evaluator.logger = logger
+    trainer.logger = logger
+    test_evaluator.logger = logger
 
     # Setup ignite handlers
     to_save_train = {
@@ -232,13 +253,14 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     # profiler.attach(trainer)
 
     # Experiment tracking
-    if enable_log_ckpt and rank == 0:
-        print(config.model_name)
+    if enable_log_ckpt:
         exp_wandb_logger, exp_trackio_logger = setup_exp_logging(
             config,
             trainer,
             optimizer,
-            evaluators={"train_eval": train_evaluator, "test_eval": test_evaluator},  # evaluator
+            evaluator=test_evaluator,
+            metrics=metrics,
+            model=model,
             return_all_loggers=True,
         )
 
@@ -250,12 +272,16 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
         tag="train",
     )
 
-    # Run evaluators at every training epoch end using "on" decorator method and print metrics to the stderr
-    # @trainer.on(Events.EPOCH_COMPLETED(every=1))
-    # def run_train_eval():
-    #     train_evaluator.run(train_dataloader)
-    #     log_metrics(train_evaluator, "train")
-    @trainer.on(Events.ITERATION_COMPLETED(every=config.eval_every_iters))
+    # Clean GPU cache
+    @test_evaluator.on(Events.EPOCH_STARTED | Events.EPOCH_COMPLETED)
+    def cleanup_memory(engine):
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+
+    # Run evaluators at every training epoch end and print metrics to the stderr
+    @trainer.on(Events.EPOCH_COMPLETED)
     def run_test_eval():
         test_evaluator.run(test_dataloader)
         log_metrics(test_evaluator, "test")
@@ -264,8 +290,10 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
     @trainer.on(Events.STARTED)
     def run_test_eval_on_start():
         test_evaluator.run(test_dataloader)
-        # Attach early stopping to test_evaluator here cause it rely on evaluator metrics dict to be defined and it is not empty after first run
-        setup_early_stopping(trainer, test_evaluator, config)
+        # Attach early stopping to test_evaluator here cause it relies on evaluator metrics dict to be defined and it is non-empty only after first run
+        if config.training_hp.early_stopping.enabled:
+            logger.info("Enabled early stopping.")
+            setup_early_stopping(trainer, test_evaluator, config)
 
     # Decode a sequence to debug training
     @test_evaluator.on(Events.EPOCH_COMPLETED(every=1))
@@ -273,25 +301,15 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
         nr_sequences = 3
         sample_batch = next(test_dataloader.__iter__())
         decoded_seq_batch = greedy_decoding(
-            config=config,
             model=model,
-            encoder_representation=model.encode(
-                sample_batch["src"][:nr_sequences].to(device), sample_batch["src_mask"][:nr_sequences].to(device)
-            ),
-            src_mask=sample_batch["src_mask"][:nr_sequences].to(device),
             tgt_tokenizer=tgt_tokenizer,
+            src_tokens=sample_batch["src"][:nr_sequences],
+            src_mask=sample_batch["src_mask"][:nr_sequences],
             max_target_tokens=config.tokenizer.max_seq_len,
+            output_mode="str",
         )
         test_evaluator.logger.info(f"Source sequences: \n{sample_batch['src_text'][:nr_sequences]}")
         test_evaluator.logger.info(f"Decoded sequences: \n{decoded_seq_batch}")
-
-    # Clean GPU cache
-    @trainer.on(Events.EPOCH_COMPLETED(every=1))
-    def cleanup_memory(engine):
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
 
     # Log time profiling
     # @trainer.on(Events.EPOCH_COMPLETED)
@@ -308,25 +326,14 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
             strict=True,
         )
 
-    # Run and profile training (PyTorch official tutorial on profiling: https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html)
-    with (
-        profile(activities=activities, profile_memory=True, record_shapes=True) as prof,
-        record_function("model_training"),
-    ):
-        trainer.run(
-            train_dataloader,
-            max_epochs=config.training_hp.num_epochs,
-        )
-    prof.export_chrome_trace(os.path.join(config.output_dir, "trace.json"))
-    if config.s3_bucket_name is not None and enable_log_ckpt:
-        s3_upload(
-            filepath=os.path.join(config.output_dir, "trace.json"),
-            bucket=config.s3_bucket_name,
-            s3_key=f"{config.model_name}/trace.json",
-        )
+    # Save config-lock
+    save_config(config, output_dir, enable_ckpt=enable_log_ckpt)
+
+    # Run training
+    trainer.run(train_dataloader, max_epochs=config.training_hp.num_epochs)
 
     # Close loggers and upload local log file to s3 if configured
-    if enable_log_ckpt and rank == 0:
+    if enable_log_ckpt:
         exp_wandb_logger.close()
         exp_trackio_logger.close()
         # profiler.write_results(config.output_dir + "/time_profiling.csv")
@@ -341,6 +348,13 @@ def run(local_rank, config, distributed=False, enable_log_ckpt=True):
 def parse_args():
     parser = argparse.ArgumentParser(description="Transformer training arguments")
     parser.add_argument(
+        "-p",
+        "--path",
+        type=str,
+        default="/".join(os.path.abspath(__file__).split("/")[:-1]),
+        help="Path to the project folder (default: this script's directory).",
+    )
+    parser.add_argument(
         "-e",
         "--exec-mode",
         choices=["dev", "dummy"],
@@ -348,30 +362,68 @@ def parse_args():
         help="""
         Execution mode: 'dev' or 'dummy' (default: dev).
         Dev: train the model in developer way, all training features are enabled.
-        Dummy: debug model training, this disables distributed training, experiment tracking and checkpointing.
+        Dummy: debug model training, this disables experiment tracking and checkpointing.
         """,
     )
     parser.add_argument(
         "-s",
         "--size",
-        choices=["nano", "small", "base"],
+        choices=["nano", "small", "base", "original"],
         default="nano",
         help="""
         Model size: 'nano', 'small' or 'base' (default: nano).
         Refer to configs/config.yml file for more info on sizes.
         """,
     )
+    parser.add_argument(
+        "-tl",
+        "--time-limit",
+        type=int,
+        default=-1,
+        help="Execution time limit defined in seconds (default: -1).",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    print(f"Execution mode: {args.exec_mode}")
-    if args.exec_mode == "dummy":
-        print("Distributed training, experiment logging and checkpointing are disabled!")
+
+    base_path = args.path if os.path.isdir(args.path) else "/".join(os.path.abspath(__file__).split("/")[:-1])
+    config_path = os.path.join(base_path, "tfs_mt/configs/config.yml")
 
     config = OmegaConf.load(config_path)
 
+    config.base_path = base_path
+    config.output_dir = os.path.join(base_path, "data/output")
+    config.cache_ds_path = os.path.join(base_path, "data")
+    config.chosen_model_size = args.size
+    config.time_limit_sec = args.time_limit if args.time_limit > 0 else -1
+    config.wandb_organization = os.getenv("WANDB_ORGANIZATION")
+
+    # Detect Kaggle enviroment and make adjustments
+    if os.path.exists("/kaggle"):
+        print("Kaggle environment detected. Overriding some config options...")
+        config.time_limit_sec = (
+            args.time_limit if (args.time_limit <= 11.5 * 3600 and args.time_limit > 0) else 11.5 * 3600
+        )
+        config.training_hp.amp_dtype = "float16"  # Neither the T4 nor the P100 support bfloat16
+        config.train_dataloader.num_workers = 4
+        config.test_dataloader.num_workers = 4
+        config.training_hp.torch_compile_mode = None
+
+    # Setup dummy training. Mainly used for debugging
+    print(f"Execution mode: {args.exec_mode}")
+    if args.exec_mode == "dummy":
+        print("Experiment logging and checkpointing are disabled!")
+        config.dataset.max_len = 1_000
+        config.training_hp.lr_scheduler.warmup_iters = (
+            5  # if it's too high it raises TooManyWarmupItersError during training setup
+        )
+        config.log_every_iters = 1
+        config.training_hp.num_epochs = 2
+        config.training_hp.torch_compile_mode = None
+
+    # Fix batch sizes if they are larger than train/test data (dataset_max_len * split_proportion)
     if config.dataset.max_len > 0 and config.train_dataloader.batch_size > int(
         config.dataset.max_len * config.dataset.train_split
     ):
@@ -381,26 +433,24 @@ if __name__ == "__main__":
     ):
         config.test_dataloader.batch_size = int(config.dataset.max_len * (1 - config.dataset.train_split))
 
-    # Enable/disable distributed training
-    config.training_hp.distributed_training = bool(torch.cuda.is_available() and torch.cuda.device_count() >= 2)
-    print(f"Distributed training availability: {config.training_hp.distributed_training}")
-    config.backend = "nccl" if config.training_hp.distributed_training else "none"
-
-    config.base_path = base_path
-    config.output_dir = output_dir
-    config.cache_ds_path = cache_ds_path
-    config.chosen_model_size = args.size
-    config.time_limit_sec = time_limit_sec
-    config.wandb_organization = os.getenv("WANDB_ORGANIZATION")
-
     config.model_name = f"{config.model_base_name}_{config.chosen_model_size}_{datetime.now().strftime('%y%m%d-%H%M')}"
 
     config.exec_mode = args.exec_mode
 
-    if config.training_hp.distributed_training and args.exec_mode != "dummy":
-        with idist.Parallel(config.backend) as p:
-            p.run(run, config, distributed=True, enable_log_ckpt=True)
-    elif args.exec_mode == "dummy":
-        run(0, config, distributed=False, enable_log_ckpt=False)
-    elif args.exec_mode == "dev":
-        run(0, config, distributed=False, enable_log_ckpt=True)
+    # Run and profile training (PyTorch official tutorial on profiling: https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html)
+    with (
+        profile(activities=activities, profile_memory=True, record_shapes=True) as prof,
+        record_function("model_training"),
+    ):
+        if args.exec_mode == "dummy":
+            run(config, enable_log_ckpt=False)
+        elif args.exec_mode == "dev":
+            run(config, enable_log_ckpt=True)
+
+    prof.export_chrome_trace(os.path.join(config.output_dir, "trace.json"))
+    if config.s3_bucket_name is not None and args.exec_mode != "dummy":
+        s3_upload(
+            filepath=os.path.join(config.output_dir, "trace.json"),
+            bucket=config.s3_bucket_name,
+            s3_key=f"{config.model_name}/trace.json",
+        )
