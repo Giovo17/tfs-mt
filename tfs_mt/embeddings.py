@@ -1,7 +1,20 @@
+# Transformer embeddings
+#
+# Author: Giovanni Spadaro - https://giovannispadaro.it
+# Project: https://github.com/Giovo17/tfs-mt
+# Documentation: https://giovo17.github.io/tfs-mt
+#
+# Copyright (c) Giovanni Spadaro.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
+
+import math
 import os
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
 from .data_utils import download_glove
 
@@ -91,21 +104,36 @@ class Embedding(nn.Module):
                 raise VocabNotBuiltError()
 
             if pretrained_emb_type == "GloVe":
-                embeddings_dim, embeddings_lut = self._load_pretrained(
+                embeddings_dim, embeddings_lut = self.load_pretrained(
                     pretrained_emb_path, pretrained_emb_type, tokenizer=kwargs["tokenizer"]
                 )
             else:
-                embeddings_dim, embeddings_lut = self._load_pretrained(pretrained_emb_path, pretrained_emb_type)
+                embeddings_dim, embeddings_lut = self.load_pretrained(pretrained_emb_path, pretrained_emb_type)
+
+            # The following operations consist in rescaling the norm of GloVe pretrained embeddings.
+            # This is done to have source and target embeddings with a comparable norm to stabilize training.
+            embeddings_lut_dummy = nn.Embedding(embeddings_lut.weight.shape[0], embeddings_lut.weight.shape[1])
+            nn.init.xavier_uniform_(embeddings_lut_dummy.weight)
+
+            embeddings_lut_dummy_norm = torch.mean(embeddings_lut_dummy.weight.data.norm(dim=1))
+            embeddings_lut_norm = torch.mean(embeddings_lut.weight.data.norm(dim=1))
+
+            rescale_coeff = embeddings_lut_dummy_norm / embeddings_lut_norm
+
+            embeddings_lut.weight.data = embeddings_lut.weight.data * rescale_coeff
 
         else:
             embeddings_dim = d_model
-            # Randomly initialized lookup table. If so the initialization will be handled in architecture.Transformer class
-            embeddings_lut = nn.Embedding(vocab_size, d_model)
+            # Randomly initialized lookup table.
+            embeddings_lut = nn.Embedding(vocab_size, embeddings_dim)
+            nn.init.xavier_uniform_(embeddings_lut.weight)
 
         self.d_model = embeddings_dim
+        self.scaling_factor = math.sqrt(self.d_model)
         self.embeddings_lut = embeddings_lut
 
-    def _load_pretrained(self, embeddings_path: str, emb_type: str = "GloVe", **kwargs) -> tuple[int, nn.Embedding]:
+    def load_pretrained(self, embeddings_path: str, emb_type: str = "GloVe", **kwargs) -> tuple[int, nn.Embedding]:
+        """Loads pretrained GloVe embedding into the embedding lookup table."""
         if emb_type == "GloVe":
             tokenizer = kwargs["tokenizer"]
 
@@ -142,17 +170,20 @@ class Embedding(nn.Module):
 
         return embeddings_dim, embeddings_lut
 
-    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, token_ids: Float[torch.Tensor, "B S"]) -> Float[torch.Tensor, "B S D"]:
         """Get token embeddings.
 
         Args:
-            token_ids (torch.Tensor): Input batch of token_ids. Expected shape: [`batch_size`, `sequence_length`]
+            token_ids (Float[torch.Tensor, "B S"]): Input batch of token_ids. Where B is the batch size and S is the sequence length.
 
         Returns:
-            torch.Tensor: Output batch of token embeddings. Shape: [`batch_size`, `sequence_length`, `d_model`]
+            Float[torch.Tensor, "B S D"]: Output batch of token embeddings. Where D is d_model.
         """
 
         embeddings = self.embeddings_lut(token_ids)
+
+        # In the embedding layers, we multiply those weights by sqrt(d_model) (Attention is all you need page 5)
+        embeddings = embeddings * self.scaling_factor
 
         return embeddings
 
@@ -169,6 +200,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     Args:
         d_model (int): Model dimension.
+        dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
         max_sequence_length (int, optional): Max sequence length. Defaults to 128.
     """
 
@@ -190,7 +222,18 @@ class SinusoidalPositionalEncoding(nn.Module):
 
         self.dropout = nn.Dropout(dropout_prob)
 
-    def forward(self, token_embeddings: nn.Embedding) -> nn.Embedding:
+    def forward(self, token_embeddings: Float[torch.Tensor, "B S D"]) -> Float[torch.Tensor, "B S D"]:
+        """Get token embeddings with positional information.
+
+        Args:
+            token_embeddings (Float[torch.Tensor, "B S D"]): Input batch of token embeddings.
+
+        Raises:
+            IncompatibleEmbeddingsDimError: Raised when the input embedding dimension is invalid.
+
+        Returns:
+            Float[torch.Tensor, "B S D"]: Token embeddings with added positional information.
+        """
         if token_embeddings.ndim != 3 or token_embeddings.size(-1) != self.pe_lut.size(1):
             raise IncompatibleEmbeddingsDimError(token_embeddings.shape)
 

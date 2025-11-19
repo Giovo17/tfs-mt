@@ -1,9 +1,25 @@
-import math
+# Transformer architecture
+#
+# Author: Giovanni Spadaro - https://giovannispadaro.it
+# Project: https://github.com/Giovo17/tfs-mt
+# Documentation: https://giovo17.github.io/tfs-mt
+#
+# Copyright (c) Giovanni Spadaro.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
 
+import math
+import os
+import tempfile
+
+import requests
 import torch
 import torch.nn as nn
+from jaxtyping import Bool, Float
 from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
+from safetensors.torch import load_file
 
 from .data_utils import WordTokenizer
 from .embeddings import Embedding, SinusoidalPositionalEncoding
@@ -31,6 +47,12 @@ class MissingArgumentsGloVeError(Exception):
 
 class ModelSizeNotChoosen(Exception):
     def __init__(self, msg="Model size not choosen. Add chosen_model_size to config."):
+        super().__init__(msg)
+
+
+class InvalidFileExtensionException(Exception):
+    def __init__(self, ext):
+        msg = f"File extension not supported: `{ext}`. Please load a `.safetensors`, `.pt` or `.pth` file."
         super().__init__(msg)
 
 
@@ -70,7 +92,7 @@ class MultiHeadAttention(nn.Module):
         # Learnable projection matrices. Bias term is omitted since they are used as projections matrices.
         # Every head should have its projection matrix, but rather considering a set of QKV matrices for each head,
         # here 3 bigger matrices are considered. The following example involves the query projection matrix W_Q but the reasoning applies to all of them.
-        # Considering D = d_model, d_k = D_v = d_head and A = num_heads.
+        # Considering D = d_model, d_k = d_v = d_head and A = num_heads.
         # W_Q is a DxD matrix and each W_Q_i (query projection matrix for i-th head) should be a DxD_k matrix.
         # W_Q can be reshaped as a DxAxD_k matrix since A*d_k = D due to initial assertion. (in practice the output projection will be reshaped as mentioned)
         # This way we can properly take advantage of GPU parallelization thanks to torch broadcasting,
@@ -86,35 +108,35 @@ class MultiHeadAttention(nn.Module):
 
     def forward(
         self,
-        x_query: torch.Tensor,
-        x_key: torch.Tensor,
-        x_value: torch.Tensor,
-        attention_mask: torch.BoolTensor | None = None,
-    ) -> torch.Tensor:
+        x_query: Float[torch.Tensor, "B S D"],
+        x_key: Float[torch.Tensor, "B S D"],
+        x_value: Float[torch.Tensor, "B S D"],
+        attention_mask: Bool[torch.Tensor, "B 1 S S"] | None = None,
+    ) -> Float[torch.Tensor, "B S D"]:
         """MultiHead attention.
 
         Args:
-            x_query (torch.Tensor): Matrix of input query embeddings of shape [B, S, D], where B is the batch size, S is the sequence length and D is d_model.
-            x_key (torch.Tensor): Matrix of input key embeddings of shape [B, S, D].
-            x_value (torch.Tensor): Matrix of input value embeddings of shape [B, S, D].
-            attention_mask (torch.BoolTensor | None, optional): Attention mask to avoid computing attention to padding tokens. It's also used to apply causal masking in decoder self attention. Defaults to None.
+            x_query (Float[torch.Tensor, "B S D"]): Matrix of input query embeddings. B is the batch size, S is the sequence length and D is d_model.
+            x_key (Float[torch.Tensor, "B S D"]): Matrix of input key embeddings.
+            x_value (Float[torch.Tensor, "B S D"]): Matrix of input value embeddings.
+            attention_mask (Bool[torch.Tensor, "B 1 S S"] | None, optional): Attention mask to avoid computing attention to padding tokens. It's also used to apply causal masking in decoder self attention. Defaults to None.
 
         Returns:
-            torch.Tensor: Processed output tensor.
+            Float[torch.Tensor, "B S D"]: Processed output tensor.
         """
         batch_size = x_query.shape[0]
 
         # W_Q(x)          [B, S, D]
         # After reshape   [B, S, A, d_k]
-        # After transpose [B, A, S, d_k] where A is num_heads and S is the sequence length
+        # After transpose [B, A, S, d_k] where A is num_heads, d_k is the head dimension
         query_matrices = self.W_Q(x_query).reshape(batch_size, -1, self.num_heads, self.d_head).transpose(1, 2)
         key_matrices = self.W_K(x_key).reshape(batch_size, -1, self.num_heads, self.d_head).transpose(1, 2)
         value_matrices = self.W_V(x_value).reshape(batch_size, -1, self.num_heads, self.d_head).transpose(1, 2)
 
-        # Concatenated heads outputs, shape [B, A*d_k]
+        # Concatenated heads outputs
         attn_output = self.attention(query_matrices, key_matrices, value_matrices, attention_mask=attention_mask)
 
-        # Reshape back from [B, A, S, d_k] to [B, S, A*d_k]
+        # Reshape to [B, S, A*d_k]
         attn_output_reshaped = attn_output.transpose(1, 2).reshape(batch_size, -1, self.num_heads * self.d_head)
 
         # Attention scores, shape [B, S, D]. Combine heads outputs into a single D-dimensional output.
@@ -122,41 +144,27 @@ class MultiHeadAttention(nn.Module):
 
     def attention(
         self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        attention_mask: torch.BoolTensor | None = None,
-    ) -> torch.Tensor:
+        query: Float[torch.Tensor, "B A S d_k"],
+        key: Float[torch.Tensor, "B A S d_k"],
+        value: Float[torch.Tensor, "B A S d_k"],
+        attention_mask: Bool[torch.Tensor, "B 1 S S"] | None = None,
+    ) -> Float[torch.Tensor, "B A S d_k"]:
         """Implements attention as follows:
 
         $$
-        Attention(Q,K,V) = softmax ( \\frac{QK^T}{\\sqrt{d_{model}}} ) * V
+        Attention(Q,K,V) = softmax ( \\frac{QK^T}{\\sqrt{d_{head}}} ) * V
         $$
 
         Args:
-            query (torch.Tensor): Matrix of input query embeddings of shape [B, S, D], where B is the batch size, S is the sequence length and D is d_model.
-            key (torch.Tensor): Matrix of input key embeddings of shape [B, S, D].
-            value (torch.Tensor): Matrix of input value embeddings of shape [B, S, D].
-            attention_mask (torch.BoolTensor | None, optional): Attention mask to avoid computing attention to padding tokens. It's also used to apply causal masking in decoder self attention. Defaults to None.
+            query (Float[torch.Tensor, "B, A, S, d_k"]): Matrix of input query embeddings. Where B is the batch size, A is the number of heads, S is the sequence length and d_k is the head dimension.
+            key (Float[torch.Tensor, "B, A, S, d_k"]): Matrix of input key embeddings.
+            value (Float[torch.Tensor, "B, A, S, d_k"]): Matrix of input value embeddings.
+            attention_mask (Bool[torch.Tensor, "B 1 S S"] | None, optional): Attention mask to avoid computing attention to padding tokens. It's also used to apply causal masking in decoder self attention. Defaults to None.
 
         Returns:
-            torch.Tensor: Attention matrix.
+            Float[torch.Tensor, "B, A, S, d_k"]: Attention matrix.
         """
         QKt = torch.matmul(query, key.transpose(-2, -1)) / self.scaling_factor
-
-        # NOTE Moved in Transformer forward method for efficiency
-        # Reshape from [B, S] to [B, 1, 1, S] to properly broadcast attention mask to all QKt matrices
-        # Broadcasting doc: https://docs.pytorch.org/docs/stable/notes/broadcasting.html
-        # attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-
-        # NOTE Moved in Transformer forward method for efficiency
-        # Build attention mask matrix with shape [B, 1, S, S] to properly mask QKt matrix
-        # eg. with considering only the last 2 dimensions
-        # input = [[ True,  True, False]]
-        # output = [[ True,  True, False],
-        #           [ True,  True, False],
-        #           [False, False, False]]
-        # attention_mask = torch.matmul(attention_mask.to(torch.int).transpose(-1,-2), attention_mask.to(torch.int)).to(torch.bool)
 
         if attention_mask is not None:
             # NOTE Adding this control to correctly process masking considering that target input sequence will be shrinked by one token
@@ -186,7 +194,7 @@ class FeedForward(nn.Module):
             nn.Linear(d_ff, d_model),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Float[torch.Tensor, "B S D"]) -> Float[torch.Tensor, "B S D"]:
         return self.mlp(x)
 
 
@@ -197,7 +205,7 @@ class LayerNorm(nn.Module):
         self.beta = nn.Parameter(torch.zeros(d_model))  # shift
         self.eps = eps  # Avoids ZeroDivisionError
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Float[torch.Tensor, "B S D"]) -> Float[torch.Tensor, "B S D"]:
         mean = torch.mean(x, dim=-1, keepdim=True)
         # There's no interest in applying Bessel's correction.
         # It is usually done to make sure var is an unbiased estimator of the sample variance,
@@ -219,28 +227,61 @@ class EncoderBlock(nn.Module):
         num_heads (int): Number of attention heads.
         d_ff (int): Size of middle feedforward layer.
         dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
+        norm_type (str, optional): Layer normalization strategy. Defaults to "postnorm".
     """
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1, norm_type: str = "postnorm"):
         super().__init__()
 
         self.self_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
         self.feedforward = FeedForward(d_model, d_ff, dropout_prob)
         self.layer_norm1 = LayerNorm(d_model)
         self.layer_norm2 = LayerNorm(d_model)
+        # Layer norm at the end of the block for prenorm configuration
+        if norm_type == "prenorm":
+            self.layer_norm3 = LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout_prob)
+        self.norm_type = norm_type
 
-    def forward(self, x: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "B S D"], attention_mask: Bool[torch.Tensor, "B 1 S S"]
+    ) -> Float[torch.Tensor, "B S D"]:
+        if self.norm_type == "postnorm":
+            return self.postnorm_forward(x, attention_mask)
+        return self.prenorm_forward(x, attention_mask)
+
+    def postnorm_forward(
+        self, x: Float[torch.Tensor, "B S D"], attention_mask: Bool[torch.Tensor, "B 1 S S"]
+    ) -> Float[torch.Tensor, "B S D"]:
+        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/pdf/2305.09312."""
+        t1 = self.self_attention(x_query=x, x_key=x, x_value=x, attention_mask=attention_mask)
+        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
+        t2 = self.dropout(t1)
+        t3 = t2 + x
+        t4 = self.layer_norm1(t3)
+
+        t5 = self.feedforward(t4)
+        t6 = self.dropout(t5)
+        t7 = t6 + t4
+        h = self.layer_norm2(t7)
+
+        return h
+
+    def prenorm_forward(
+        self, x: Float[torch.Tensor, "B S D"], attention_mask: Bool[torch.Tensor, "B 1 S S"]
+    ) -> Float[torch.Tensor, "B S D"]:
+        """Prenorm forward function. More on https://arxiv.org/abs/2002.04745."""
         t1 = self.layer_norm1(x)
         t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=attention_mask)
-        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
-        t2 = self.dropout(t2)
-        t3 = t2 + x
+        t3 = self.dropout(t2)
+        t4 = t3 + x
 
-        t4 = self.layer_norm2(t3)
-        t5 = self.feedforward(t4)
-        t5 = self.dropout(t5)
-        h = t5 + t3
+        t5 = self.layer_norm2(t4)
+        t6 = self.feedforward(t5)
+        t7 = self.dropout(t6)
+        t8 = t7 + t4
+
+        h = self.layer_norm3(t8)
 
         return h
 
@@ -255,9 +296,10 @@ class DecoderBlock(nn.Module):
         num_heads (int): Number of attention heads.
         d_ff (int): Size of middle feedforward layer.
         dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
+        norm_type (str, optional): Layer normalization strategy. Defaults to "postnorm".
     """
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout_prob: float = 0.1, norm_type: str = "postnorm"):
         super().__init__()
 
         self.self_attention = MultiHeadAttention(d_model, num_heads, dropout_prob)
@@ -266,32 +308,77 @@ class DecoderBlock(nn.Module):
         self.layer_norm1 = LayerNorm(d_model)
         self.layer_norm2 = LayerNorm(d_model)
         self.layer_norm3 = LayerNorm(d_model)
+        # Layer norm at the end of the block for prenorm configuration
+        if norm_type == "prenorm":
+            self.layer_norm4 = LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout_prob)
+        self.norm_type = norm_type
 
     def forward(
         self,
-        x: torch.Tensor,
-        encoder_representation: torch.Tensor,
-        tgt_mask: torch.BoolTensor,
-        src_mask: torch.BoolTensor,
-    ) -> torch.Tensor:
-        t1 = self.layer_norm1(x)
-        t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=tgt_mask)
-        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
-        t2 = self.dropout(t2)
-        t3 = t2 + x
+        x: Float[torch.Tensor, "B S D"],
+        encoder_representation: Float[torch.Tensor, "B S D"],
+        tgt_mask: Bool[torch.Tensor, "B 1 S S"],
+        src_mask: Bool[torch.Tensor, "B 1 S S"],
+    ) -> Float[torch.Tensor, "B S D"]:
+        if self.norm_type == "postnorm":
+            return self.postnorm_forward(x, encoder_representation, tgt_mask, src_mask)
+        return self.prenorm_forward(x, encoder_representation, tgt_mask, src_mask)
 
-        t4 = self.layer_norm2(t3)
+    def postnorm_forward(
+        self,
+        x: Float[torch.Tensor, "B S D"],
+        encoder_representation: Float[torch.Tensor, "B S D"],
+        tgt_mask: Bool[torch.Tensor, "B 1 S S"],
+        src_mask: Bool[torch.Tensor, "B 1 S S"],
+    ) -> torch.Tensor:
+        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/pdf/2305.09312."""
+        t1 = self.self_attention(x_query=x, x_key=x, x_value=x, attention_mask=tgt_mask)
+        # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
+        t2 = self.dropout(t1)
+        t3 = t2 + x
+        t4 = self.layer_norm1(t3)
+
         t5 = self.cross_attention(
             x_query=t4, x_key=encoder_representation, x_value=encoder_representation, attention_mask=src_mask
         )
-        t5 = self.dropout(t5)
-        t6 = t5 + t3
+        t6 = self.dropout(t5)
+        t7 = t6 + t4
+        t8 = self.layer_norm2(t7)
 
-        t7 = self.layer_norm3(t6)
-        t8 = self.feedforward(t7)
-        t8 = self.dropout(t8)
-        h = t8 + t6
+        t9 = self.feedforward(t8)
+        t10 = self.dropout(t9)
+        t11 = t10 + t8
+        h = self.layer_norm3(t11)
+
+        return h
+
+    def prenorm_forward(
+        self,
+        x: Float[torch.Tensor, "B S D"],
+        encoder_representation: Float[torch.Tensor, "B S D"],
+        tgt_mask: Bool[torch.Tensor, "B 1 S S"],
+        src_mask: Bool[torch.Tensor, "B 1 S S"],
+    ) -> torch.Tensor:
+        """Prenorm forward function. More on https://arxiv.org/abs/2002.04745."""
+        t1 = self.layer_norm1(x)
+        t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=tgt_mask)
+        t3 = self.dropout(t2)
+        t4 = t3 + x
+
+        t5 = self.layer_norm2(t4)
+        t6 = self.cross_attention(
+            x_query=t5, x_key=encoder_representation, x_value=encoder_representation, attention_mask=src_mask
+        )
+        t7 = self.dropout(t6)
+        t8 = t7 + t4
+
+        t9 = self.layer_norm3(t8)
+        t10 = self.feedforward(t9)
+        t11 = self.dropout(t10)
+        t12 = t11 + t8
+
+        h = self.layer_norm4(t12)
 
         return h
 
@@ -309,7 +396,9 @@ class Transformer(nn.Module):
         d_model (int, optional): Model dimension. Defaults to 512.
         num_heads (int, optional): Number of heads in MultiHead Attention. Defaults to 8.
         d_ff (int, optional): Size of middle feedforward layer. Defaults to 2048.
+        norm_type (str, optional): Layer normalization strategy. Defaults to "postnorm".
         dropout_prob (float, optional): Dropout probability. Defaults to 0.1.
+        max_seq_len (int, optional): Max sequence length. Defaults to 128.
 
     Raises:
         MissingArgumentsError: Raised when `src_emb_from_pretrained` is supplied in `kwargs`, but `src_emb_pretrained_type` and `src_emb_pretrained_path` are not supplied. This error also applies for `tgt_emb_from_pretrained`.
@@ -325,6 +414,7 @@ class Transformer(nn.Module):
         d_model: int = 512,
         num_heads: int = 8,
         d_ff: int = 2048,
+        norm_type: str = "postnorm",
         dropout_prob: float = 0.1,
         max_seq_len: int = 128,
         **kwargs,
@@ -369,41 +459,47 @@ class Transformer(nn.Module):
         self.tgt_pos_embeddings = SinusoidalPositionalEncoding(d_model, dropout_prob, max_sequence_length=max_seq_len)
 
         self.encoder = nn.ModuleList([
-            EncoderBlock(d_model, num_heads, d_ff, dropout_prob) for _ in range(num_encoder_blocks)
+            EncoderBlock(d_model, num_heads, d_ff, dropout_prob, norm_type) for _ in range(num_encoder_blocks)
         ])
         self.decoder = nn.ModuleList([
-            DecoderBlock(d_model, num_heads, d_ff, dropout_prob) for _ in range(num_decoder_blocks)
+            DecoderBlock(d_model, num_heads, d_ff, dropout_prob, norm_type) for _ in range(num_decoder_blocks)
         ])
 
         self.unembedding_matrix = nn.Linear(d_model, tgt_vocab_size, bias=False)
 
-    def init_params(self, skip_embeddings: str | None = None):
+    def init_params(self):
         """Xavier initialize uninitialized layers.
 
         This weight initialization strategy was first introduced [here](https://proceedings.mlr.press/v9/glorot10a.html). It's used to stabilize gradients during training.
-
-        Args:
-            skip_embeddings (str | None, optional): Which type of embedding should skip Xavier initialization. Useful when initializing embeddings with GloVe. Defaults to None.
         """
         for name, p in self.named_parameters():
-            if skip_embeddings is not None and f"{skip_embeddings}_embeddings" in name:
-                print(f"Skipping Xavier init for {skip_embeddings} embeddings")
+            if "embeddings" in name:  # Embeddings are initialized in their init function
                 continue
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
     def forward(
-        self, src_sequence: torch.Tensor, tgt_sequence: torch.Tensor, src_mask: torch.Tensor, tgt_mask: torch.Tensor
-    ) -> torch.Tensor:
+        self,
+        src_sequence: Float[torch.Tensor, "B S"],
+        tgt_sequence: Float[torch.Tensor, "B S"],
+        src_mask: Bool[torch.Tensor, "B 1 S S"],
+        tgt_mask: Bool[torch.Tensor, "B 1 S S"],
+    ) -> Float[torch.Tensor, "B S D"]:
+        encoder_representation = self.encode(src_sequence, src_mask)
+        decoder_output = self.decode(tgt_sequence, encoder_representation, tgt_mask, src_mask)
+
+        return decoder_output
+
+    def encode(
+        self, src_sequence: Float[torch.Tensor, "B S"], src_mask: Bool[torch.Tensor, "B 1 S S"]
+    ) -> Float[torch.Tensor, "B S D"]:
+        """Encode method."""
         src_x = self.src_embeddings(src_sequence)
-        tgt_x = self.tgt_embeddings(tgt_sequence)
         src_x = self.src_pos_embeddings(src_x)
-        tgt_x = self.tgt_pos_embeddings(tgt_x)
 
         # Reshape from [B, S] to [B, 1, 1, S] to properly broadcast attention mask to all QKt matrices
         # Broadcasting doc: https://docs.pytorch.org/docs/stable/notes/broadcasting.html
         src_mask = src_mask.unsqueeze(1).unsqueeze(2)
-        tgt_mask = tgt_mask.unsqueeze(1).unsqueeze(2)
 
         # Build attention mask matrix with shape [B, 1, S, S] to properly mask QKt matrix
         # eg. with considering only the last 2 dimensions
@@ -411,35 +507,9 @@ class Transformer(nn.Module):
         # output = [[ True,  True, False],
         #           [ True,  True, False],
         #           [False, False, False]]
-        src_mask = torch.matmul(src_mask.to(torch.float).transpose(-1, -2), src_mask.to(torch.float)).to(torch.bool)
-        tgt_mask = torch.matmul(tgt_mask.to(torch.float).transpose(-1, -2), tgt_mask.to(torch.float)).to(torch.bool)
-
-        # Apply causal masking
-        # This speeds up computation since only one masked_fill will be applied in each decoder attention module
-        causal_mask = (
-            torch.triu(torch.ones((tgt_mask.shape[0], 1, tgt_mask.shape[-1], tgt_mask.shape[-1])), diagonal=1) == 0
-        ).to(tgt_mask.device)
-        tgt_mask = tgt_mask & causal_mask  # Extract intersection between pad_mask and causal mask
-
-        encoder_representation = src_x
-        for i in range(len(self.encoder)):
-            encoder_representation = self.encoder[i](encoder_representation, src_mask)
-
-        decoder_representation = tgt_x
-        for i in range(len(self.decoder)):
-            decoder_representation = self.decoder[i](decoder_representation, encoder_representation, tgt_mask, src_mask)
-
-        decoder_output = self.unembedding_matrix(decoder_representation)
-
-        return decoder_output
-
-    # Methods needed during decoding
-    def encode(self, src_sequence: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
-        src_x = self.src_embeddings(src_sequence)
-        src_x = self.src_pos_embeddings(src_x)
-
-        src_mask = src_mask.unsqueeze(1).unsqueeze(2)
-        src_mask = torch.matmul(src_mask.to(torch.float).transpose(-1, -2), src_mask.to(torch.float)).to(torch.bool)
+        src_mask = src_mask.to(torch.float)  # Convert to float to allow transpose operation
+        src_mask = torch.matmul(src_mask.transpose(-1, -2), src_mask)
+        src_mask = src_mask.to(torch.bool)  # Convert back to boolean mask
 
         encoder_representation = src_x
         for i in range(len(self.encoder)):
@@ -449,67 +519,180 @@ class Transformer(nn.Module):
 
     def decode(
         self,
-        tgt_sequence: torch.Tensor,
-        encoder_representation: torch.Tensor,
-        tgt_mask: torch.Tensor,
-        src_mask: torch.Tensor,
-    ) -> torch.Tensor:
+        tgt_sequence: Float[torch.Tensor, "B S"],
+        encoder_representation: Float[torch.Tensor, "B S D"],
+        tgt_mask: Bool[torch.Tensor, "B 1 S S"],
+        src_mask: Bool[torch.Tensor, "B 1 S S"],
+    ) -> Float[torch.Tensor, "B S D"]:
+        """Decode method."""
         tgt_x = self.tgt_embeddings(tgt_sequence)
         tgt_x = self.tgt_pos_embeddings(tgt_x)
 
         tgt_mask = tgt_mask.unsqueeze(1).unsqueeze(2)
         src_mask = src_mask.unsqueeze(1).unsqueeze(2)
-        tgt_mask = torch.matmul(tgt_mask.to(torch.float).transpose(-1, -2), tgt_mask.to(torch.float)).to(torch.bool)
-        src_mask = torch.matmul(src_mask.to(torch.float).transpose(-1, -2), src_mask.to(torch.float)).to(torch.bool)
 
+        tgt_mask = tgt_mask.to(torch.float)
+        src_mask = src_mask.to(torch.float)
+        tgt_mask = torch.matmul(tgt_mask.transpose(-1, -2), tgt_mask)
+        src_mask = torch.matmul(src_mask.transpose(-1, -2), src_mask)
+        tgt_mask = tgt_mask.to(torch.bool)
+        src_mask = src_mask.to(torch.bool)
+
+        # Apply causal masking
+        # This speeds up computation since only one masked_fill will be applied in each decoder attention module
         causal_mask = (
             torch.triu(torch.ones((tgt_mask.shape[0], 1, tgt_mask.shape[-1], tgt_mask.shape[-1])), diagonal=1) == 0
         ).to(tgt_mask.device)
-        tgt_mask = tgt_mask & causal_mask
+        tgt_mask = tgt_mask & causal_mask  # Extract intersection between pad_mask and causal mask
 
         decoder_representation = tgt_x
         for i in range(len(self.decoder)):
             decoder_representation = self.decoder[i](decoder_representation, encoder_representation, tgt_mask, src_mask)
 
+        # Language modeling head
+        # Decoded output represents the output logits, softmax needs to be applied if output probabilities are needed
         decoder_output = self.unembedding_matrix(decoder_representation)
 
         return decoder_output
 
 
 def build_model(
-    config: DictConfig | ListConfig, src_tokenizer: WordTokenizer, tgt_tokenizer: WordTokenizer
-) -> nn.Module:
+    config: DictConfig | ListConfig | str,
+    src_tokenizer: WordTokenizer | None = None,
+    tgt_tokenizer: WordTokenizer | None = None,
+    from_pretrained: bool | None = False,
+    **kwargs,
+) -> Transformer:
     """Build Transformer model according to a config file.
 
     Args:
-        config (DictConfig | ListConfig): Project config file.
-        src_tokenizer (WordTokenizer): Source text tokenizer.
-        tgt_tokenizer (WordTokenizer): Target text tokenizer.
+        config (DictConfig | ListConfig | str): Project config object or str to load it.
+        src_tokenizer (WordTokenizer | None, optional): Source text tokenizer. Defaults to None.
+        tgt_tokenizer (WordTokenizer | None, optional): Target text tokenizer. Defaults to None.
+        from_pretrained (bool | None, optional): Load pretrained weights. Defaults to False.
 
     Raises:
         ModelSizeNotChoosen: Raised when config doesn't have `chosen_model_size` key.
 
     Returns:
-        nn.Module: Initialized Transformer model according to config yaml file and choosen model size.
+        Transformer: Initialized Transformer model according to config yaml file and choosen model size.
     """
 
-    import os
+    # Load config
+    if isinstance(config, str):
+        from omegaconf import OmegaConf
+
+        if config.startswith(("https://", "http://")):
+            from io import StringIO
+
+            if not config.endswith((".yaml", ".yml")):
+                Exception(
+                    f"File extension not supported: `{config.split('.')[-1]}`. Please load a `.yaml` or `.yml` file."
+                )
+            try:
+                resp = requests.get(config, timeout=10)
+                resp.raise_for_status()
+                config = OmegaConf.load(StringIO(resp.text))
+            except Exception as e:
+                raise RuntimeError(f"Failed to download config file from {config}: {e}") from e
+        else:
+            if os.path.exists(config) and config.endswith((".yaml", ".yml")):
+                config = OmegaConf.load(config)
+            else:
+                raise FileNotFoundError(
+                    "Config yaml file not found or wrong file provided. Only `.yaml` and `.yml` are allowed."
+                )
 
     if "chosen_model_size" not in config:
         raise ModelSizeNotChoosen()
 
-    # GloVe embeddings available only for English language
+    # Load from pretrained
+    if from_pretrained:
+        if kwargs.get("model_path") is not None:
+            model = Transformer(
+                src_vocab_size=config.src_tokenizer_vocab_size,
+                tgt_vocab_size=config.tgt_tokenizer_vocab_size,
+                num_encoder_blocks=config.model_configs[config.chosen_model_size].num_encoder_layers,
+                num_decoder_blocks=config.model_configs[config.chosen_model_size].num_decoder_layers,
+                d_model=config.model_configs[config.chosen_model_size].d_model,
+                num_heads=config.model_configs[config.chosen_model_size].num_heads,
+                d_ff=config.model_configs[config.chosen_model_size].d_ff,
+                norm_type=config.model_configs[config.chosen_model_size].norm_type,
+                dropout_prob=config.model_parameters.dropout,
+                max_seq_len=config.tokenizer.max_seq_len,
+            )
+
+            model_filepath = None
+            if str(kwargs["model_path"]).startswith(("https://", "http://")):
+                try:
+                    response = requests.get(kwargs["model_path"], timeout=100)
+                    response.raise_for_status()
+
+                    if kwargs["model_path"].endswith(".safetensors"):
+                        suffix = ".safetensors"
+                    elif kwargs["model_path"].endswith(".pt"):
+                        suffix = ".pt"
+                    elif kwargs["model_path"].endswith(".pth"):
+                        suffix = ".pth"
+                    else:
+                        raise InvalidFileExtensionException(kwargs["model_path"].split(".")[-1])
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                        tmp_file.write(response.content)
+                        model_filepath = tmp_file.name
+
+                except Exception as e:
+                    raise RuntimeError(f"Failed to download model from {kwargs['model_path']}: {e}") from e
+            else:
+                model_filepath = kwargs["model_path"]
+
+            # Load the model weights
+            try:
+                if model_filepath.endswith(".safetensors"):
+                    state_dict = load_file(model_filepath)
+                else:
+                    state_dict = torch.load(model_filepath, map_location="cpu", weights_only=True)
+                    first_layer_key = next(iter(state_dict.keys()))
+                    if first_layer_key.startswith("_orig_mod."):
+                        new_state_dict = {}
+                        prefix = "_orig_mod."
+                        for k, v in state_dict.items():
+                            new_k = k[len(prefix) :] if k.startswith(prefix) else k
+                            new_state_dict[new_k] = v
+                        state_dict = new_state_dict
+
+                model.load_state_dict(state_dict, strict=False, assign=True)
+
+                if str(kwargs["model_path"]).startswith(("https://", "http://")):
+                    os.unlink(model_filepath)
+            except Exception as e:
+                raise RuntimeError(f"Failed to load model weights from {model_filepath}: {e}") from e
+
+            return model
+
+        else:
+            raise MissingArgumentsError("Missing model_path argument")
+
+    # Disable pretrained_word_embeddings option when no GloVe embeddings version and filename are provided in the configuration
+    if (
+        config.model_configs[config.chosen_model_size].get("glove_version", None) is None
+        and config.model_configs[config.chosen_model_size].get("glove_filename", None) is None
+    ):
+        config.model_configs.pretrained_word_embeddings = None
+
+    # NOTE GloVe embeddings available only for English language
     if (
         config.dataset.src_lang != "en" and config.dataset.tgt_lang != "en"
     ) or config.model_configs.pretrained_word_embeddings is None:
         model = Transformer(
-            src_tokenizer.vocab_size,
-            tgt_tokenizer.vocab_size,
+            src_vocab_size=src_tokenizer.vocab_size,
+            tgt_vocab_size=tgt_tokenizer.vocab_size,
             num_encoder_blocks=config.model_configs[config.chosen_model_size].num_encoder_layers,
             num_decoder_blocks=config.model_configs[config.chosen_model_size].num_decoder_layers,
             d_model=config.model_configs[config.chosen_model_size].d_model,
             num_heads=config.model_configs[config.chosen_model_size].num_heads,
             d_ff=config.model_configs[config.chosen_model_size].d_ff,
+            norm_type=config.model_configs[config.chosen_model_size].norm_type,
             dropout_prob=config.model_parameters.dropout,
             max_seq_len=config.tokenizer.max_seq_len,
         )
@@ -523,13 +706,14 @@ def build_model(
 
         if config.dataset.src_lang == "en":  # English is the source language
             model = Transformer(
-                src_tokenizer.vocab_size,
-                tgt_tokenizer.vocab_size,
+                src_vocab_size=src_tokenizer.vocab_size,
+                tgt_vocab_size=tgt_tokenizer.vocab_size,
                 num_encoder_blocks=config.model_configs[config.chosen_model_size].num_encoder_layers,
                 num_decoder_blocks=config.model_configs[config.chosen_model_size].num_decoder_layers,
                 d_model=config.model_configs[config.chosen_model_size].d_model,
                 num_heads=config.model_configs[config.chosen_model_size].num_heads,
                 d_ff=config.model_configs[config.chosen_model_size].d_ff,
+                norm_type=config.model_configs[config.chosen_model_size].norm_type,
                 dropout_prob=config.model_parameters.dropout,
                 max_seq_len=config.tokenizer.max_seq_len,
                 src_emb_from_pretrained=True,
@@ -537,17 +721,17 @@ def build_model(
                 src_emb_pretrained_path=glove_path,
                 src_tokenizer=src_tokenizer,
             )
-            model.init_params(skip_embeddings="src")
 
         else:  # English is the target language
             model = Transformer(
-                src_tokenizer.vocab_size,
-                tgt_tokenizer.vocab_size,
+                src_vocab_size=src_tokenizer.vocab_size,
+                tgt_vocab_size=tgt_tokenizer.vocab_size,
                 num_encoder_blocks=config.model_configs[config.chosen_model_size].num_encoder_layers,
                 num_decoder_blocks=config.model_configs[config.chosen_model_size].num_decoder_layers,
                 d_model=config.model_configs[config.chosen_model_size].d_model,
                 num_heads=config.model_configs[config.chosen_model_size].num_heads,
                 d_ff=config.model_configs[config.chosen_model_size].d_ff,
+                norm_type=config.model_configs[config.chosen_model_size].norm_type,
                 dropout_prob=config.model_parameters.dropout,
                 max_seq_len=config.tokenizer.max_seq_len,
                 tgt_emb_from_pretrained=True,
@@ -555,6 +739,7 @@ def build_model(
                 tgt_emb_pretrained_path=glove_path,
                 tgt_tokenizer=tgt_tokenizer,
             )
-            model.init_params(skip_embeddings="tgt")
+
+        model.init_params()
 
     return model
