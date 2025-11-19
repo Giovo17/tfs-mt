@@ -1,3 +1,14 @@
+# Transformer data utils
+#
+# Author: Giovanni Spadaro - https://giovannispadaro.it
+# Project: https://github.com/Giovo17/tfs-mt
+# Documentation: https://giovo17.github.io/tfs-mt
+#
+# Copyright (c) Giovanni Spadaro.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
+
 import json
 import os
 import re
@@ -8,10 +19,10 @@ from collections import Counter
 from functools import partial
 from itertools import chain
 
-import ignite.distributed as idist
 import numpy as np
 import requests
 import torch
+import torch.nn.functional as F
 from datasets import load_dataset
 from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
@@ -211,7 +222,8 @@ class WordTokenizer(BaseTokenizer):
                     # Detect sub contraction already present in the dict
                     elif comp_contraction in self.nested_contractions_dict and contraction not in list(
                         chain.from_iterable(self.nested_contractions_dict.values())
-                    ):  # Merge all elements in sub contractions lists in a single list
+                    ):
+                        # Merge all elements in sub contractions lists in a single list
                         self.nested_contractions_dict[comp_contraction].append(contraction)
 
         # Final sets of sub contractions and non-nested contractions
@@ -253,19 +265,24 @@ class WordTokenizer(BaseTokenizer):
 
     @classmethod
     def from_pretrained(cls: "WordTokenizer", path: str) -> "WordTokenizer":
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        if path.startswith(("https://", "http://")):
+            try:
+                response = requests.get(path, timeout=100)
+                response.raise_for_status()
+                data = response.json()
+            except Exception as e:
+                raise RuntimeError(f"Failed to download tokenizer from {path}: {e}") from e
+        else:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
 
         if data.get("vocab") is None:
             raise CheckpointEmptyVocabException()
 
-        tokenizer = cls()
+        tokenizer = cls(special_tokens=data.get("special_tokens", {}), contractions=data.get("contractions", {}))
         tokenizer.vocab = data.get("vocab")
         tokenizer.vocab_reverse = {idx: token for token, idx in tokenizer.vocab.items()}
-        tokenizer.special_tokens = data.get("special_tokens", {})
-        tokenizer.contractions = data.get("contractions", {})
-
-        print(tokenizer.sos_token_idx)
 
         return tokenizer
 
@@ -652,7 +669,10 @@ class TranslationDataset(Dataset):
 
 
 def batch_collate_fn(
-    batch: dict[str, torch.Tensor | list[str]], src_pad_token_id: int, tgt_pad_token_id: int
+    batch: dict[str, torch.Tensor | list[str]],
+    src_pad_token_id: int,
+    tgt_pad_token_id: int,
+    pad_all_to_len: int = -1,
 ) -> dict[str, torch.Tensor | list[str]]:
     """Used to tell the Dataloader how to properly build a batch.
 
@@ -667,6 +687,7 @@ def batch_collate_fn(
         batch (dict[str, torch.Tensor  |  list[str]]): Batch of token ids and masks.
         src_pad_token_id (int): Pad token for source sequences.
         tgt_pad_token_id (int): Pad token for target sequences.
+        pad_all_to_len (int): Sequence length to pad all sequences. If -1 it gets ignored. Defaults to -1.
 
     Returns:
         dict[str, torch.Tensor | list[str]]: Batch with padded sequences.
@@ -678,7 +699,20 @@ def batch_collate_fn(
     for key in keys:
         field_data = [sample[key] for sample in batch]
 
+        # sample batch dict = {
+        #     "src": torch.Tensor(),
+        #     "tgt": torch.Tensor(),
+        #     "src_mask": torch.BoolTensor(),
+        #     "tgt_mask": torch.BoolTensor(),
+        #     "src_text": list[str],
+        #     "tgt_text": list[str]
+        # }
         if isinstance(field_data[0], torch.Tensor):
+            if pad_all_to_len != -1:
+                num_padding_values = pad_all_to_len - field_data[0].shape[0]
+                if num_padding_values >= 0:
+                    field_data[0] = F.pad(field_data[0], (0, num_padding_values), value=0)
+
             if key == "src":
                 pad_token_id = src_pad_token_id
             elif key == "tgt":
@@ -701,7 +735,6 @@ def build_data_utils(
     | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, BaseTokenizer, BaseTokenizer]
 ):
     """Build tokenizers, datasets and dataloaders for Machine Translation.
-    Designed to support torch ignite distributed training.
 
     Args:
         config (DictConfig | ListConfig): Configuration object from omegaconf.
@@ -710,11 +743,6 @@ def build_data_utils(
     Returns:
         tuple[DataLoader, DataLoader] | tuple[DataLoader, DataLoader, TranslationDataset, TranslationDataset, BaseTokenizer, BaseTokenizer]: Dataloaders or dataloaders, datasets and tokenizers.
     """
-
-    if config.training_hp.distributed_training:
-        local_rank = idist.get_local_rank()
-        if local_rank > 0:
-            idist.barrier()
 
     data = load_dataset(config.dataset.dataset_id, config.dataset.dataset_name, cache_dir=config.cache_ds_path)["train"]
 
@@ -753,9 +781,11 @@ def build_data_utils(
 
     # Get tokenizers from pretrained
     if "src_tokenizer" in kwargs and "tgt_tokenizer" in kwargs:
+        print("Getting tokenizers from pretrained...")
         src_tokenizer, tgt_tokenizer = kwargs.get("src_tokenizer"), kwargs.get("tgt_tokenizer")
 
     else:
+        print("Building tokenizers and vocabularies...")
         tok_types_dict = {"word": WordTokenizer, "bpe": BPETokenizer}
         src_tokenizer = tok_types_dict[config.tokenizer.type](
             special_tokens,
@@ -803,6 +833,7 @@ def build_data_utils(
     config.tokenizer.tgt_pad_token_idx = tgt_tokenizer.pad_token_idx
     config.tokenizer.tgt_unk_token_idx = tgt_tokenizer.unk_token_idx
 
+    print("Building datasets...")
     train_dataset = TranslationDataset(
         train_src_texts,
         train_tgt_texts,
@@ -825,11 +856,7 @@ def build_data_utils(
     print(f"Train dataset length: {len(train_dataset)}")
     print(f"Test dataset length: {len(test_dataset)}")
 
-    if config.training_hp.distributed_training and local_rank == 0:
-        idist.barrier()
-
-    # Ignite autodataloader adapts for distributed and non-distributed configurations
-    train_dataloader = idist.auto_dataloader(
+    train_dataloader = DataLoader(
         train_dataset,
         batch_size=config.train_dataloader.batch_size,
         num_workers=config.train_dataloader.num_workers,
@@ -837,14 +864,15 @@ def build_data_utils(
             batch_collate_fn,
             src_pad_token_id=config.tokenizer.src_pad_token_idx,
             tgt_pad_token_id=config.tokenizer.tgt_pad_token_idx,
+            pad_all_to_len=config.tokenizer.max_seq_len if config.train_dataloader.pad_all_to_max_len else -1,
         ),
         shuffle=config.train_dataloader.shuffle,
         drop_last=config.train_dataloader.drop_last,
-        persistent_workers=True,  # If True, the data loader will not shut down the worker processes after a dataset has been consumed once. This allows to maintain the workers Dataset instances alive
-        pin_memory=True,
+        persistent_workers=True,  # If True, the dataloader will not shut down the worker processes after a dataset has been consumed once. This allows to maintain the workers Dataset instances alive
+        pin_memory=torch.cuda.is_available(),  # Pinned memory is not used anyway by torch where no accelerator is employed.
         prefetch_factor=config.train_dataloader.prefetch_factor,
     )
-    test_dataloader = idist.auto_dataloader(
+    test_dataloader = DataLoader(
         test_dataset,
         batch_size=config.test_dataloader.batch_size,
         num_workers=config.test_dataloader.num_workers,
@@ -852,11 +880,12 @@ def build_data_utils(
             batch_collate_fn,
             src_pad_token_id=config.tokenizer.src_pad_token_idx,
             tgt_pad_token_id=config.tokenizer.tgt_pad_token_idx,
+            pad_all_to_len=config.tokenizer.max_seq_len if config.test_dataloader.pad_all_to_max_len else -1,
         ),
         shuffle=config.test_dataloader.shuffle,
         drop_last=config.test_dataloader.drop_last,
         persistent_workers=True,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
         prefetch_factor=config.train_dataloader.prefetch_factor,
     )
 
