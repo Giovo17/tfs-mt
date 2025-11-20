@@ -1,1 +1,1 @@
-::: tfs_mt.architecture
+::: src.tfs_mt.architecture

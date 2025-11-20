@@ -1,1 +1,1 @@
-::: tfs_mt.embeddings
+::: src.tfs_mt.embeddings
