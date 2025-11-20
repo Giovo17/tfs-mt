@@ -1,0 +1,129 @@
+seed: 42
+
+log_every_iters: 1_000
+save_every_iters: 10_000  # Only used for training, testing checkpoints will be saved whenever each epoch ends.
+eval_every_iters: 10_000
+update_pbar_every_iters: 100
+time_limit_sec: -1
+checkpoints_retain_n: 5  # The number of checkpoints that will be saved are double the specified number, one half will come from training and the other from testing
+s3_bucket_name: "tfs-mt-checkpoints"  # Set to null to disable s3 checkpointing
+
+# If null training will start from scratch
+ckpt_path_to_resume_from: null  #s3://bucket-name/path/to/checkpoint.pt or filesystem path
+#ckpt_path_to_resume_from: "s3://tfs-mt-checkpoints/tfs_mt_small_251104-1748/tfs_mt_checkpoint_100000.pt"
+
+# It takes only the folder/bucket path and searches for src_tokenizer_{type}.json and tgt_tokenizer_{type}.json files
+# Will be ignored if ckpt_path_to_resume_from is not null
+#tokenizers_resume_path: null
+#tokenizers_resume_path: "s3://tfs-mt-checkpoints/tfs_mt_small_251030-1733/"  # vocab size 40000
+tokenizers_resume_path: "s3://tfs-mt-checkpoints/tfs_mt_small_251104-1748/"  # vocab size 70000
+
+model_base_name: "tfs_mt"
+
+model_parameters:
+  dropout: 0.1
+
+model_configs:
+  pretrained_word_embeddings: "GloVe"  # Set to null to disable pretrained embeddings
+  positional_embeddings: "sinusoidal"
+  nano:
+    num_encoder_layers: 4
+    num_decoder_layers: 4
+    d_model: 50
+    num_heads: 4
+    d_ff: 200
+    norm_type: "postnorm"
+    # Considered only if pretrained_word_embeddings == "GloVe"
+    glove_version: "glove.2024.wikigiga.50d"
+    glove_filename: "wiki_giga_2024_50_MFT20_vectors_seed_123_alpha_0.75_eta_0.075_combined"
+  small:
+    num_encoder_layers: 6
+    num_decoder_layers: 6
+    d_model: 100
+    num_heads: 6
+    d_ff: 400
+    norm_type: "postnorm"
+    glove_version: "glove.2024.wikigiga.100d"
+    glove_filename: "wiki_giga_2024_100_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05.050_combined"
+  base:
+    num_encoder_layers: 8
+    num_decoder_layers: 8
+    d_model: 300
+    num_heads: 8
+    d_ff: 800
+    norm_type: "postnorm"  # prenorm should perform better when the number of layers increases. Source: https://arxiv.org/abs/2002.04745
+    glove_version: "glove.2024.wikigiga.300d"
+    glove_filename: "wiki_giga_2024_300_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05_combined"
+  original:
+    num_encoder_layers: 6
+    num_decoder_layers: 6
+    d_model: 512
+    num_heads: 8
+    d_ff: 2048
+    norm_type: "postnorm"
+
+training_hp:
+  num_epochs: 5
+  use_amp: True
+  amp_dtype: "bfloat16"
+  torch_compile_mode: "max-autotune"  # Set to null to use default
+
+  loss:
+    type: "crossentropy"  #["crossentropy", "KLdiv-labelsmoothing"]
+    label_smoothing: 0.1
+
+  optimizer:
+    type: "AdamW"
+    weight_decay: 1e-4
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1e-8
+
+  lr_scheduler:
+    type: "original" # [wsd, original]  Original is intended as the "Attention is all you need" implementation
+    min_lr: 3e-4
+    max_lr: 1e-3
+    warmup_iters: 25_000
+    stable_iters_prop: 0.7
+
+  max_gradient_norm: 5.0  # Set to 0.0 to avoid gradient clipping
+
+  early_stopping:
+    enabled: False
+    patience: 40_000  # Number of iterations to wait if no improvement and then stop the training.
+    min_delta: 1e-5
+
+tokenizer:
+  type: "word"  # [word, bpe]  GloVe pretrained embeddings require word tokenization
+  sos_token: "<s>"
+  eos_token: "</s>"
+  pad_token: "<PAD>"
+  unk_token: "<UNK>"
+  max_seq_len: 131  # Max recorded sequence length in europarl dataset is 131
+  max_vocab_size: 70_000
+  vocab_min_freq: 2
+
+dataset:
+  dataset_task: "machine-translation"
+  dataset_id: "Helsinki-NLP/europarl"
+  dataset_name: "en-it"
+  train_split: 0.95
+  src_lang: "en"
+  tgt_lang: "it"
+  max_len: -1
+
+train_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: True
+  drop_last: True
+  prefetch_factor: 2  # Number of batches loaded in advance by each worker. 2 means there will be a total of 2 * num_workers batches prefetched across all workers. Be aware this may cause OOM errors
+  pad_all_to_max_len: True  # Unique padding sequence length for all samples. Speedup CUDA processing if True
+
+test_dataloader:
+  batch_size: 128
+  num_workers: 4
+  shuffle: False
+  drop_last: False
+  prefetch_factor: 2
+  pad_all_to_max_len: True

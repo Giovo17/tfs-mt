@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: "v5.0.0"
+    rev: "v6.0.0"
     hooks:
       - id: check-case-conflict
       - id: check-merge-conflict
@@ -15,12 +15,14 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: "v0.12.7"
+    rev: "v0.12.10"
     hooks:
       # Run the linter excluding ipynb.
       - id: ruff
         types_or: [ python, pyi ]
-        args: [ --fix ]
+        args:
+          - --fix
+          - --ignore=C901,RUF002,E712,TRY003,F722,TRY301
       # Run the formatter excluding ipynb.
       - id: ruff-format
         types_or: [ python, pyi ]

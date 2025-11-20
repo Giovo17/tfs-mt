@@ -7,19 +7,49 @@ edit_uri: edit/main/docs/
 repo_name: Giovo17/tfs-mt
 copyright: Maintained by <a href="https://giovannispadaro.it">Giovanni Spadaro</a>.
 
+
 nav:
   - Home: index.md
-  - Modules: modules.md
-plugins:
-  - search
-  - mkdocstrings:
-      handlers:
-        python:
-          paths: ["tfs_mt"]
+  - Architecture: architecture_explain.md
+  - Modules:
+    - Architecture: modules/architecture.md
+    - Embeddings: modules/embeddings.md
+    - Data utils: modules/data_utils.md
+    - Training utils: modules/training_utils.md
+    - Decoding utils: modules/decoding_utils.md
+
+
 theme:
   name: material
-  feature:
-    tabs: true
+  features:
+    - announce.dismiss
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate
+    - content.code.copy
+    # - content.code.select
+    # - content.footnote.tooltips
+    # - content.tabs.link
+    - content.tooltips
+    # - header.autohide
+    # - navigation.expand
+    - navigation.footer
+    - navigation.indexes
+    # - navigation.instant
+    # - navigation.instant.prefetch
+    # - navigation.instant.progress
+    # - navigation.prune
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+    # - toc.integrate
+  language: en
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: default
@@ -45,8 +75,54 @@ extra:
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/tfs-mt
 
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["tfs_mt"]
+  - bibtex:
+      bib_file: "docs/architecture_explain/references.bib"
+      bib_by_default: False
+  - drawio
+  - glightbox:
+      touchNavigation: true
+      loop: false
+      effect: zoom
+      slide_effect: slide
+      width: 100%
+      height: auto
+      zoomable: true
+      draggable: true
+      skip_classes:
+        - custom-skip-class-name
+      auto_themed: false
+      auto_caption: false
+      caption_position: bottom
+      background: white
+      shadow: true
+      manual: false
+
 markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.arithmatex:
       generic: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          #format: !!python/name:pymdownx.superfences.fence_code_format
+  - footnotes
+  - attr_list
+  - md_in_html
+  - pymdownx.blocks.caption
+
+extra_javascript:
+  - javascripts/katex.js
+  - https://unpkg.com/katex@0/dist/katex.min.js
+  - https://unpkg.com/katex@0/dist/contrib/auto-render.min.js
+
+extra_css:
+  - https://unpkg.com/katex@0/dist/katex.min.css
