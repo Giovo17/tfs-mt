@@ -1,6 +1,6 @@
 [project]
 name = "tfs-mt"
-version = "0.0.1"
+version = "0.1"
 description = "Transformer from scratch for Machine Translation"
 authors = [{ name = "Giovanni Spadaro", email = "giovannispada17.gs@gmail.com" }]
 readme = "README.md"
