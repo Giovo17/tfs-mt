@@ -19,6 +19,7 @@ import boto3
 import botocore
 import ignite.distributed as idist
 import torch
+from botocore.client import BaseClient
 from dotenv import load_dotenv
 from ignite.handlers.checkpoint import BaseSaveHandler
 
@@ -83,7 +84,7 @@ class S3Saver(BaseSaveHandler):
             self._check_and_setup(require_empty)
 
     @staticmethod
-    def _make_s3_client() -> boto3.client:
+    def _make_s3_client() -> BaseClient:
         """Create a boto3 S3 client using env vars and optional custom endpoint."""
         access_key = os.getenv("AWS_ACCESS_KEY")
         secret_key = os.getenv("AWS_SECRET_KEY")

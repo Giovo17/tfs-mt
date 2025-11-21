@@ -234,7 +234,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         Returns:
             Float[torch.Tensor, "B S D"]: Token embeddings with added positional information.
         """
-        if token_embeddings.ndim != 3 or token_embeddings.size(-1) != self.pe_lut.size(1):
+        if token_embeddings.ndim != 3 or token_embeddings.size(-1) != self.pe_lut.shape[1]:
             raise IncompatibleEmbeddingsDimError(token_embeddings.shape)
 
         positional_encodings = self.pe_lut[: token_embeddings.size(1)]

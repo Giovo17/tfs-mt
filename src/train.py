@@ -230,7 +230,7 @@ def run(config, enable_log_ckpt=True):
     }
 
     # Setup trainer and evaluator
-    trainer = setup_trainer(config, model, optimizer, lr_scheduler, loss_fn, device, train_dataloader.sampler)
+    trainer = setup_trainer(config, model, optimizer, lr_scheduler, loss_fn, device)
     test_evaluator = setup_evaluator(config, model, metrics, device)
 
     # Setup engines logger with python logging print training configurations

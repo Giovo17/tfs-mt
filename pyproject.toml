@@ -78,6 +78,25 @@ packages = ["src/tfs_mt"]
 python = "./.venv"
 python-version = "3.12"
 
+[tool.ty.rules]
+unresolved-attribute = "ignore"
+unresolved-import = "ignore"
+unresolved-reference = "warn"
+invalid-argument-type = "warn"
+not-iterable = "warn"
+invalid-assignment = "warn"
+invalid-raise = "warn"
+non-subscriptable = "warn"
+unknown-argument = "warn"
+invalid-return-type = "warn"
+too-many-positional-arguments = "warn"
+no-matching-overload = "warn"
+
+[tool.ty.src]
+include = ["src", "tests"]
+exclude = ["src/ckpt_upload_hf.py", "src/visualization.py"]
+
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

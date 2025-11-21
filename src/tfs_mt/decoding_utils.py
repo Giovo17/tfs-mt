@@ -13,13 +13,13 @@ import numpy as np
 import torch
 
 from .architecture import Transformer
-from .data_utils import WordTokenizer
+from .data_utils import BaseTokenizer
 
 
 @torch.inference_mode()
 def greedy_decoding(
     model: Transformer,
-    tgt_tokenizer: WordTokenizer,
+    tgt_tokenizer: BaseTokenizer,
     src_tokens: np.ndarray | torch.Tensor,
     src_mask: np.ndarray | torch.Tensor,
     max_target_tokens: int = 128,
@@ -38,7 +38,7 @@ def greedy_decoding(
 
     Args:
         model (Transformer): Encoder-decoder translation model.
-        tgt_tokenizer (WordTokenizer): Target text tokenizer.
+        tgt_tokenizer (BaseTokenizer): Target text tokenizer.
         src_tokens (torch.Tensor): Source tokens.
         src_mask (torch.Tensor): Source tokens mask.
         max_target_tokens (int, optional): Max target tokens to output. Defaults to 128.
@@ -144,7 +144,7 @@ def greedy_decoding(
 @torch.inference_mode()
 def beam_decoding(
     model: Transformer,
-    tgt_tokenizer: WordTokenizer,
+    tgt_tokenizer: BaseTokenizer,
     src_tokens: np.ndarray | torch.Tensor,
     src_mask: np.ndarray | torch.Tensor,
     max_target_tokens: int = 128,

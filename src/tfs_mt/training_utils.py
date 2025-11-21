@@ -35,7 +35,7 @@ from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 
-from .data_utils import WordTokenizer
+from .data_utils import BaseTokenizer, WordTokenizer
 from .ignite_custom_utils.checkpoint import BucketNotFoundError, S3Saver
 from .ignite_custom_utils.common import setup_trackio_logging
 from .ignite_custom_utils.trackio_logger import TrackioLogger
@@ -73,7 +73,7 @@ def resume_from_ckpt(
     strict: bool = True,
     resume_tokenizers: bool = False,
     tokenizers_type: str | None = "word",
-) -> None | tuple[WordTokenizer, WordTokenizer]:
+) -> None | tuple[BaseTokenizer, BaseTokenizer]:
     """Loads state dict from a checkpoint file to resume the training or loads tokenizers.
     It supports loading from local or bucket s3 checkpoint.
 
@@ -92,7 +92,7 @@ def resume_from_ckpt(
         S3FailedDownloadError: Raised when download fails.
 
     Returns:
-        None | tuple[WordTokenizer, WordTokenizer]: Pretrained tokenizers if resume_tokenizers. Otherwise None.
+        None | tuple[BaseTokenizer, BaseTokenizer]: Pretrained tokenizers if resume_tokenizers. Otherwise None.
     """
 
     resume_method = "local"
@@ -277,18 +277,6 @@ def setup_exp_logging(
     3. wandb.init documentation [[link](https://docs.wandb.ai/models/ref/python/functions/init)]
     4. trackio.init documentation [[link](https://huggingface.co/docs/trackio/en/api#trackio.init)]
     """
-    # wandb_logger = setup_wandb_logging(
-    #     trainer,
-    #     optimizers,
-    #     evaluators,
-    #     config.log_every_iters,
-    #     # wandb.init kwargs
-    #     entity=config.wandb_organization,
-    #     project=config.model_base_name,
-    #     name=config.model_name,
-    #     config=config._content,
-    #     tags=["pytorch", "nlp", "machine-translation"],
-    # )
 
     wandb_logger = WandBLogger(
         entity=config.wandb_organization,
@@ -439,7 +427,7 @@ def setup_early_stopping(
 
 
 def nlp_metric_transform(
-    output: tuple[torch.Tensor, torch.Tensor], tgt_tokenizer: WordTokenizer
+    output: tuple[torch.Tensor, torch.Tensor], tgt_tokenizer: BaseTokenizer
 ) -> tuple[list[list[str]], list[list[list[str]]]]:
     """Transform `eval_one_iter` output to be compliant with ignite nlp metrics.
 
@@ -449,7 +437,7 @@ def nlp_metric_transform(
 
     Args:
         output (tuple[torch.Tensor, torch.Tensor]): Output of `eval_one_iter`.
-        tgt_tokenizer (WordTokenizer): Target tokenizer used to decode tokens.
+        tgt_tokenizer (BaseTokenizer): Target tokenizer used to decode tokens.
 
     Returns:
         tuple[list[list[str]], list[list[list[str]]]]: Metrics complatible output.
@@ -628,7 +616,7 @@ def setup_trainer(
     loss_fn: nn.Module,
     device: torch.device,
 ) -> Engine | DeterministicEngine:
-    """Setup a trainer with multigpu and mixed precision training support.
+    """Setup a trainer with mixed precision training support.
 
     Args:
         config (DictConfig | ListConfig): Project config file.
@@ -647,9 +635,7 @@ def setup_trainer(
 
     amp_dtype_dict = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
 
-    def train_one_iter(
-        engine: Engine | DeterministicEngine, batch: dict[str, torch.Tensor | str]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def train_one_iter(engine: Engine | DeterministicEngine, batch: dict[str, torch.Tensor | str]) -> dict[str, Any]:
         # non_blocking asynchronously transfers tensor from CPU to device. More here: https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html
         src_sequence = batch["src"].to(device, non_blocking=True, dtype=torch.long)
         tgt_sequence = batch["tgt"].to(device, non_blocking=True, dtype=torch.long)
