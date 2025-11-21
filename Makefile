@@ -9,7 +9,7 @@ check:
 	@echo "Checks"
 	@uv lock --locked
 	@uv run prek run -a
-	@uv run mypy
+	@uv run ty check
 
 .PHONY: test
 test:

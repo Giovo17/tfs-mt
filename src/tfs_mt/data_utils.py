@@ -264,7 +264,7 @@ class WordTokenizer(BaseTokenizer):
         return self.vocab.get(self.special_tokens["unk_token"], 3)
 
     @classmethod
-    def from_pretrained(cls: "WordTokenizer", path: str) -> "WordTokenizer":
+    def from_pretrained(cls: type["WordTokenizer"], path: str) -> "WordTokenizer":
         if path.startswith(("https://", "http://")):
             try:
                 response = requests.get(path, timeout=100)
@@ -581,7 +581,7 @@ class TranslationDataset(Dataset):
                 self._build_vocabs(kwargs.get("vocab_min_freq", 2))
 
         # Filter input data excluding texts longer than max_sequence_length
-        if max_sequence_length > 0:
+        if max_sequence_length is not None and max_sequence_length > 0:
             print(f"Max sequence length set to {max_sequence_length}.")
             self.src_texts, self.tgt_texts = [], []
         else:
@@ -599,7 +599,7 @@ class TranslationDataset(Dataset):
             tgt_text_tokenized = tgt_tokenizer.tokenize(tgt_text)
 
             # Exclude sequences that exceed max_sequence_length
-            if max_sequence_length > 0:
+            if max_sequence_length is not None and max_sequence_length > 0:
                 if (
                     len(src_text_tokenized) > max_sequence_length - 2
                 ):  # -2 accounts for SOS and EOS tokens that will be added in the __getitem__ method

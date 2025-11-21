@@ -21,7 +21,7 @@ from omegaconf.dictconfig import DictConfig
 from omegaconf.listconfig import ListConfig
 from safetensors.torch import load_file
 
-from .data_utils import WordTokenizer
+from .data_utils import BaseTokenizer
 from .embeddings import Embedding, SinusoidalPositionalEncoding
 
 
@@ -558,8 +558,8 @@ class Transformer(nn.Module):
 
 def build_model(
     config: DictConfig | ListConfig | str,
-    src_tokenizer: WordTokenizer | None = None,
-    tgt_tokenizer: WordTokenizer | None = None,
+    src_tokenizer: BaseTokenizer | None = None,
+    tgt_tokenizer: BaseTokenizer | None = None,
     from_pretrained: bool | None = False,
     **kwargs,
 ) -> Transformer:
@@ -567,8 +567,8 @@ def build_model(
 
     Args:
         config (DictConfig | ListConfig | str): Project config object or str to load it.
-        src_tokenizer (WordTokenizer | None, optional): Source text tokenizer. Defaults to None.
-        tgt_tokenizer (WordTokenizer | None, optional): Target text tokenizer. Defaults to None.
+        src_tokenizer (BaseTokenizer | None, optional): Source text tokenizer. Defaults to None.
+        tgt_tokenizer (BaseTokenizer | None, optional): Target text tokenizer. Defaults to None.
         from_pretrained (bool | None, optional): Load pretrained weights. Defaults to False.
 
     Raises:
