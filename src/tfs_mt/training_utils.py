@@ -34,7 +34,6 @@ from torch import nn
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
-from torch.utils.data import Sampler
 
 from .data_utils import WordTokenizer
 from .ignite_custom_utils.checkpoint import BucketNotFoundError, S3Saver
@@ -628,7 +627,6 @@ def setup_trainer(
     lr_scheduler: LRScheduler,
     loss_fn: nn.Module,
     device: torch.device,
-    train_sampler: Sampler,
 ) -> Engine | DeterministicEngine:
     """Setup a trainer with multigpu and mixed precision training support.
 
@@ -638,7 +636,6 @@ def setup_trainer(
         optimizer (Optimizer): Optimizer.
         loss_fn (nn.Module): Loss function.
         device (torch.device): Device.
-        train_sampler (Sampler): Torch data sampler. Use for multigpu training.
 
     Returns:
         Engine | DeterministicEngine: Trainer object.
