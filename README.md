@@ -7,8 +7,6 @@
       <img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main" /></a>
     <a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
         <img src="https://img.shields.io/github/license/Giovo17/tfs-mt" /></a>
-    <a href="https://github.com/Giovo17/tfs-mt" alt="GitHub">
-        <img src="https://img.shields.io/badge/github-repo-blue?logo=github"/></a>
     <a href="https://giovo17.github.io/tfs-mt" alt="Documentation">
         <img src="https://img.shields.io/badge/docs-giovo17.github.io/tfs--mt-blue" /></a>
     <a href="https://huggingface.co/giovo17/tfs-mt" alt="Hugging Face">

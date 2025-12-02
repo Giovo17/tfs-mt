@@ -9,8 +9,6 @@
         <img src="https://img.shields.io/github/license/Giovo17/tfs-mt" /></a>
     <a href="https://github.com/Giovo17/tfs-mt" alt="GitHub">
         <img src="https://img.shields.io/badge/github-repo-blue?logo=github"/></a>
-    <a href="https://giovo17.github.io/tfs-mt" alt="Documentation">
-        <img src="https://img.shields.io/badge/docs-giovo17.github.io/tfs--mt-blue" /></a>
     <a href="https://huggingface.co/giovo17/tfs-mt" alt="Hugging Face">
         <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-tfs--mt-ffc107?color=ffc107&logoColor=white"/></a>
     <a href="https://huggingface.co/spaces/giovo17/tfs-mt-demo" alt="Demo app">
