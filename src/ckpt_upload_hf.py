@@ -269,7 +269,7 @@ def generate_readme(config: DictConfig, model_name: str) -> str:
     # Model description
     readme_parts.append("Transformer from scratch for Machine Translation.")
 
-    inference_script_path = os.path.join(os.getcwd(), "inference.py")
+    inference_script_path = os.path.join(os.getcwd(), "src/inference.py")
     with open(inference_script_path) as f:
         inference_code = f.readlines()
 
