@@ -33,7 +33,7 @@ from tfs_mt.architecture import build_model
 from tfs_mt.data_utils import build_data_utils
 from tfs_mt.decoding_utils import greedy_decoding
 from tfs_mt.training_utils import (
-    LabelSmoothingLoss,
+    KLDivLabelSmoothingLoss,
     get_device,
     get_param_groups,
     log_metrics,
@@ -200,7 +200,7 @@ def run(config, enable_log_ckpt=True):
         ).to(device=device)
 
     elif config.training_hp.loss.type == "KLdiv-labelsmoothing":
-        loss_fn = LabelSmoothingLoss(
+        loss_fn = KLDivLabelSmoothingLoss(
             vocab_size=tgt_tokenizer.vocab_size,
             padding_idx=tgt_tokenizer.pad_token_idx,
             smoothing=config.training_hp.loss.label_smoothing,

@@ -574,7 +574,7 @@ def setup_lr_lambda_fn(config: DictConfig | ListConfig) -> Callable[[int], float
         raise ValueError(f"Invalid learning rate scheduler type, got {config.training_hp.lr_scheduler.type}")
 
 
-class LabelSmoothingLoss(nn.Module):
+class KLDivLabelSmoothingLoss(nn.Module):
     def __init__(self, vocab_size: int, padding_idx: int, smoothing: float = 0.1):
         super().__init__()
         self.criterion = nn.KLDivLoss(reduction="sum")
