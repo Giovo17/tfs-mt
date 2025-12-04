@@ -90,3 +90,16 @@ The project supports various model configurations to suit different computationa
 | **Norm Type**      | PostNorm | PostNorm | PostNorm | PostNorm |
 | **Dropout**        | 0.1      | 0.1      | 0.1      | 0.1      |
 | **GloVe Dim**      | 50d      | 100d     | 300d     | -        |
+
+## Citation
+
+If you use `tfs-mt` in your research or project, please cite:
+
+```
+@software{Spadaro_tfs-mt,
+author = {Spadaro, Giovanni},
+license = {MIT},
+title = {{tfs-mt}},
+url = {https://github.com/Giovo17/tfs-mt}
+}
+```

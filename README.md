@@ -95,3 +95,16 @@ The project supports various model configurations to suit different computationa
 ## Documentation
 
 Full documentation is available at [https://giovo17.github.io/tfs-mt/](https://giovo17.github.io/tfs-mt/).
+
+## Citation
+
+If you use `tfs-mt` in your research or project, please cite:
+
+```
+@software{Spadaro_tfs-mt,
+author = {Spadaro, Giovanni},
+license = {MIT},
+title = {{tfs-mt}},
+url = {https://github.com/Giovo17/tfs-mt}
+}
+```
