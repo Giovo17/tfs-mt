@@ -95,7 +95,7 @@ The project supports various model configurations to suit different computationa
 
 If you use `tfs-mt` in your research or project, please cite:
 
-```
+```bibtex
 @software{Spadaro_tfs-mt,
 author = {Spadaro, Giovanni},
 license = {MIT},

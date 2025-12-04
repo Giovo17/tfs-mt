@@ -100,7 +100,7 @@ Full documentation is available at [https://giovo17.github.io/tfs-mt/](https://g
 
 If you use `tfs-mt` in your research or project, please cite:
 
-```
+```bibtex
 @software{Spadaro_tfs-mt,
 author = {Spadaro, Giovanni},
 license = {MIT},
