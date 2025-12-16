@@ -11,7 +11,7 @@ The Transformer architecture was first introduced in the paper "Attention Is All
 
 
 
-![Inference schema](architecture_explain/img/inference_schema.png){ loading=lazy }
+![Architecture schema](architecture_explain/img/architecture_schema.png){ loading=lazy }
 /// caption
-Caption. [@build-llms-from-scratch-book]
+Overall architecture scheme. [@build-llms-from-scratch-book]
 ///
