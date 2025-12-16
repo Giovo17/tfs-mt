@@ -1,20 +1,16 @@
-<h1 align="center">tfs-mt</h1>
 
 <div align="center">
-    <a href="https://img.shields.io/github/v/release/Giovo17/tfs-mt" alt="Release">
-        <img src="https://img.shields.io/github/v/release/Giovo17/tfs-mt"/></a>
-    <a href="https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain" alt="Build status">
-      <img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main" /></a>
-    <a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
-        <img src="https://img.shields.io/github/license/Giovo17/tfs-mt" /></a>
-    <a href="https://giovo17.github.io/tfs-mt" alt="Documentation">
-        <img src="https://img.shields.io/badge/docs-giovo17.github.io/tfs--mt-blue" /></a>
-    <a href="https://huggingface.co/giovo17/tfs-mt" alt="Hugging Face">
-        <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-tfs--mt-ffc107?color=ffc107&logoColor=white"/></a>
-    <a href="https://huggingface.co/spaces/giovo17/tfs-mt-demo" alt="Demo app">
-        <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Demo%20app-tfs--mt--demo-ffc107?color=ffc107&logoColor=white"/></a>
-    <a href="https://pypi.org/project/tfs-mt/" alt="PyPi monthly downloads">
-        <img src="https://img.shields.io/pypi/dm/tfs-mt"/></a>
+
+<h1>tfs-mt<br>
+Transformer from scratch for Machine Translation</h1>
+
+[![Release](https://img.shields.io/github/v/release/Giovo17/tfs-mt)](https://github.com/Giovo17/tfs-mt/releases)
+[![Build status](https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main)](https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain)
+[![License: MIT](https://img.shields.io/github/license/Giovo17/tfs-mt)](https://github.com/Giovo17/tfs-mt/blob/main/LICENSE)
+[![pypi monthly downloads](https://img.shields.io/pypi/dm/tfs-mt)](https://pypi.org/project/tfs-mt/)
+
+
+[▶️ Getting started](#-getting-started) • [📖 Documentation](https://giovo17.github.io/tfs-mt) • [🤗 Hugging Face](https://huggingface.co/giovo17/tfs-mt) • [🎬 Demo](https://huggingface.co/spaces/giovo17/tfs-mt-demo)
 
 </div>
 
@@ -95,3 +91,16 @@ The project supports various model configurations to suit different computationa
 ## Documentation
 
 Full documentation is available at [https://giovo17.github.io/tfs-mt/](https://giovo17.github.io/tfs-mt/).
+
+## Citation
+
+If you use `tfs-mt` in your research or project, please cite:
+
+```bibtex
+@software{Spadaro_tfs-mt,
+author = {Spadaro, Giovanni},
+license = {MIT},
+title = {{tfs-mt}},
+url = {https://github.com/Giovo17/tfs-mt}
+}
+```

@@ -1,0 +1,34 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: tfs-mt
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Giovanni
+    family-names: Spadaro
+    email: giovannispada17.gs@gmail.com
+identifiers:
+  - type: url
+    value: 'https://github.com/Giovo17/tfs-mt'
+    description: GitHub repo
+repository-code: 'https://github.com/Giovo17/tfs-mt'
+url: 'https://giovo17.github.io/tfs-mt/'
+repository: 'https://huggingface.co/giovo17/tfs-mt'
+abstract: >-
+  This project implements the Transformer architecture from
+  scratch considering Machine Translation as the usecase.
+  It's mainly intended as an educational resource and a
+  functional implementation of the architecture and the
+  training/inference logic.
+keywords:
+  - transformer
+  - deep-learning
+  - nlp
+  - pytorch
+  - machine-translation
+  - nmt
+license: MIT

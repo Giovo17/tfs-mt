@@ -74,8 +74,8 @@ class MultiHeadAttention(nn.Module):
         self.num_heads = num_heads
 
         # NOTE Usually transformer models have d_model divisible by num_heads.
-        # This guarantees that the attention heads' outputs when stacked together are d_model shaped vectors (considering each embedding vector)
-        # In this implementation it has been preferred to remove this contraint. When exploiting the support of GloVe pretrained embeddings,
+        # This guarantees that the attention heads' outputs are d_model shaped vectors when stacked together (considering each embedding vector)
+        # In this implementation it has been preferred to remove this constraint. When exploiting the support of GloVe pretrained embeddings,
         # d_model is fixed to GloVe embeddings sizes, namely 25, 50, 100, 200, 300, so in this scenario num_heads would be limited to predefined set of values due to int quantization.
         # Considering the intermidiate output dimensions there will be no problems since the 3 initial projections matrices' shapes have been adjusted in order to map
         # from d_model to num_heads * self.d_head (see below why the projection matrices are not splitted into head-specific matrices).
@@ -164,7 +164,7 @@ class MultiHeadAttention(nn.Module):
         Returns:
             Float[torch.Tensor, "B, A, S, d_k"]: Attention matrix.
         """
-        QKt = torch.matmul(query, key.transpose(-2, -1)) / self.scaling_factor
+        QKt = torch.matmul(query, key.transpose(-1, -2)) / self.scaling_factor
 
         if attention_mask is not None:
             # NOTE Adding this control to correctly process masking considering that target input sequence will be shrinked by one token
@@ -175,6 +175,9 @@ class MultiHeadAttention(nn.Module):
 
         # Applying the softmax on last dim makes results in a QKt matrix with normalized rows
         QKt_norm = torch.softmax(QKt, dim=-1)
+
+        # Store attention weights for visualization purposes
+        self.attn_weights = QKt_norm.detach()
 
         QKt_norm = self.dropout(QKt_norm)
 
@@ -219,9 +222,6 @@ class LayerNorm(nn.Module):
 class EncoderBlock(nn.Module):
     """Transformer Encoder block.
 
-    Using prenorm approach which stabilizes training and allows the model to converge faster,
-    according to *On Layer Normalization in the Transformer Architecture* [[link](https://arxiv.org/abs/2002.04745)]
-
     Args:
         d_model (int): Model dimension.
         num_heads (int): Number of attention heads.
@@ -253,7 +253,7 @@ class EncoderBlock(nn.Module):
     def postnorm_forward(
         self, x: Float[torch.Tensor, "B S D"], attention_mask: Bool[torch.Tensor, "B 1 S S"]
     ) -> Float[torch.Tensor, "B S D"]:
-        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/pdf/2305.09312."""
+        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/abs/2305.09312."""
         t1 = self.self_attention(x_query=x, x_key=x, x_value=x, attention_mask=attention_mask)
         # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
         t2 = self.dropout(t1)
@@ -332,7 +332,7 @@ class DecoderBlock(nn.Module):
         tgt_mask: Bool[torch.Tensor, "B 1 S S"],
         src_mask: Bool[torch.Tensor, "B 1 S S"],
     ) -> torch.Tensor:
-        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/pdf/2305.09312."""
+        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/abs/2305.09312."""
         t1 = self.self_attention(x_query=x, x_key=x, x_value=x, attention_mask=tgt_mask)
         # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
         t2 = self.dropout(t1)
@@ -342,6 +342,7 @@ class DecoderBlock(nn.Module):
         t5 = self.cross_attention(
             x_query=t4, x_key=encoder_representation, x_value=encoder_representation, attention_mask=src_mask
         )
+
         t6 = self.dropout(t5)
         t7 = t6 + t4
         t8 = self.layer_norm2(t7)
@@ -482,8 +483,8 @@ class Transformer(nn.Module):
         self,
         src_sequence: Float[torch.Tensor, "B S"],
         tgt_sequence: Float[torch.Tensor, "B S"],
-        src_mask: Bool[torch.Tensor, "B 1 S S"],
-        tgt_mask: Bool[torch.Tensor, "B 1 S S"],
+        src_mask: Bool[torch.Tensor, "B S"],
+        tgt_mask: Bool[torch.Tensor, "B S"],
     ) -> Float[torch.Tensor, "B S D"]:
         encoder_representation = self.encode(src_sequence, src_mask)
         decoder_output = self.decode(tgt_sequence, encoder_representation, tgt_mask, src_mask)
@@ -491,7 +492,7 @@ class Transformer(nn.Module):
         return decoder_output
 
     def encode(
-        self, src_sequence: Float[torch.Tensor, "B S"], src_mask: Bool[torch.Tensor, "B 1 S S"]
+        self, src_sequence: Float[torch.Tensor, "B S"], src_mask: Bool[torch.Tensor, "B S"]
     ) -> Float[torch.Tensor, "B S D"]:
         """Encode method."""
         src_x = self.src_embeddings(src_sequence)
@@ -511,6 +512,9 @@ class Transformer(nn.Module):
         src_mask = torch.matmul(src_mask.transpose(-1, -2), src_mask)
         src_mask = src_mask.to(torch.bool)  # Convert back to boolean mask
 
+        # Store mask for visualization purposes
+        self.attention_mask = src_mask
+
         encoder_representation = src_x
         for i in range(len(self.encoder)):
             encoder_representation = self.encoder[i](encoder_representation, src_mask)
@@ -521,22 +525,36 @@ class Transformer(nn.Module):
         self,
         tgt_sequence: Float[torch.Tensor, "B S"],
         encoder_representation: Float[torch.Tensor, "B S D"],
-        tgt_mask: Bool[torch.Tensor, "B 1 S S"],
-        src_mask: Bool[torch.Tensor, "B 1 S S"],
+        tgt_mask: Bool[torch.Tensor, "B S"],
+        src_mask: Bool[torch.Tensor, "B S"],
     ) -> Float[torch.Tensor, "B S D"]:
         """Decode method."""
         tgt_x = self.tgt_embeddings(tgt_sequence)
         tgt_x = self.tgt_pos_embeddings(tgt_x)
 
         tgt_mask = tgt_mask.unsqueeze(1).unsqueeze(2)
-        src_mask = src_mask.unsqueeze(1).unsqueeze(2)
+        cross_src_mask = src_mask.unsqueeze(1).unsqueeze(2)
 
-        tgt_mask = tgt_mask.to(torch.float)
-        src_mask = src_mask.to(torch.float)
+        # Build cross attention mask matrix with shape [B, 1, S, S] to properly mask QKt matrix
+        # As done before in the encoder attention, now there's the need avoid attention computation to target pad tokens
+        # Please refer to the documentation for more details
+        # eg. with considering only the last 2 dimensions
+        # src_input = [[ True,  True, True, False]]
+        # tgt_input = [[ True,  True, False, False]]
+        # output = [[ True,  True, True, False],
+        #           [ True,  True, True, False],
+        #           [False, False, False, False],
+        #           [False, False, False, False]]
+        cross_src_mask = cross_src_mask.to(torch.float)  # Convert to float to allow transpose operation
+        tgt_mask = tgt_mask.to(torch.float)  # Convert to float to allow transpose operation
+        cross_src_mask = torch.matmul(tgt_mask.transpose(-1, -2), cross_src_mask)
+        cross_src_mask = cross_src_mask.to(torch.bool)  # Convert back to boolean mask
+
+        # Store mask for visualization purposes
+        self.cross_attention_mask = cross_src_mask
+
         tgt_mask = torch.matmul(tgt_mask.transpose(-1, -2), tgt_mask)
-        src_mask = torch.matmul(src_mask.transpose(-1, -2), src_mask)
         tgt_mask = tgt_mask.to(torch.bool)
-        src_mask = src_mask.to(torch.bool)
 
         # Apply causal masking
         # This speeds up computation since only one masked_fill will be applied in each decoder attention module
@@ -545,9 +563,14 @@ class Transformer(nn.Module):
         ).to(tgt_mask.device)
         tgt_mask = tgt_mask & causal_mask  # Extract intersection between pad_mask and causal mask
 
+        # Store mask for visualization purposes
+        self.causal_attention_mask = tgt_mask
+
         decoder_representation = tgt_x
         for i in range(len(self.decoder)):
-            decoder_representation = self.decoder[i](decoder_representation, encoder_representation, tgt_mask, src_mask)
+            decoder_representation = self.decoder[i](
+                decoder_representation, encoder_representation, tgt_mask, cross_src_mask
+            )
 
         # Language modeling head
         # Decoded output represents the output logits, softmax needs to be applied if output probabilities are needed
