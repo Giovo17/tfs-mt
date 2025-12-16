@@ -17,22 +17,7 @@ Transformer from scratch for Machine Translation</h1>
 
     <br>
 
-    <a href="#getting-started">
-        ▶️ Getting started
-    </a>
-    •
-    <a href="https://giovo17.github.io/tfs-mt">
-        📖 Documentation
-    </a>
-    •
-    <a href="https://huggingface.co/giovo17/tfs-mt">
-        🤗 Hugging Face
-    </a>
-    •
-    <a href="https://huggingface.co/spaces/giovo17/tfs-mt-demo">
-        🎬 Demo
-    </a>
-
+    [▶️ Getting started](#getting-started) • [📖 Documentation](https://giovo17.github.io/tfs-mt) • [🤗 Hugging Face](https://huggingface.co/giovo17/tfs-mt) • [🎬 Demo](https://huggingface.co/spaces/giovo17/tfs-mt-demo)
 
 </div>
 
