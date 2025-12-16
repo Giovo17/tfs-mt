@@ -37,9 +37,9 @@ build-and-publish: build publish
 .PHONY: docs-test
 docs-test:
 	@echo "Building doc"
-	@uv run mkdocs build -s
+	@uv run zensical build -s
 
 .PHONY: docs
 docs:
 	@echo "Serve doc"
-	@uv run mkdocs serve
+	@uv run zensical serve

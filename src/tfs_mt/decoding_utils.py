@@ -28,13 +28,15 @@ def greedy_decoding(
     """
     Supports batch (decode multiple source sentences) greedy decoding.
 
-    Decoding could be further optimized to cache old token activations because they can't look ahead and so
-    adding a newly predicted token won't change old token's activations.
+    Note: Example
+        We input `<s>` and do a forward pass. We get intermediate activations for `<s>` and at the output at position
+        0, after the doing linear layer we get e.g. token `<I>`. Now we input `<s>`,`<I>` but `<s>`'s activations will remain
+        the same. Similarly say we now got `<am>` at output position 1, in the next step we input `<s>`,`<I>`,`<am>` and so `<I>`'s
+        activations will remain the same as it only looks at/attends to itself and to `<s>` and so forth.
 
-    Example: we input `<s>` and do a forward pass. We get intermediate activations for `<s>` and at the output at position
-    0, after the doing linear layer we get e.g. token `<I>`. Now we input `<s>`,`<I>` but `<s>`'s activations will remain
-    the same. Similarly say we now got `<am>` at output position 1, in the next step we input `<s>`,`<I>`,`<am>` and so `<I>`'s
-    activations will remain the same as it only looks at/attends to itself and to `<s>` and so forth.
+    Note:
+        Decoding could be further optimized to cache old token activations because they can't look ahead and so
+        adding a newly predicted token won't change old token's activations.
 
     Args:
         model (Transformer): Encoder-decoder translation model.

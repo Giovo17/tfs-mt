@@ -1,37 +1,34 @@
-<h1 align="center">tfs-mt<br>
+<div align="center">
+
+<h1>tfs-mt<br>
 Transformer from scratch for Machine Translation</h1>
 
-<div align="center">
-    <a href="https://github.com/Giovo17/tfs-mt/releases" alt="Release">
-        <img src="https://img.shields.io/github/v/release/Giovo17/tfs-mt"/>
-    </a>
-    <a href="https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain" alt="Build status">
-      <img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main"/>
-    </a>
-    <a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
-        <img src="https://img.shields.io/github/license/Giovo17/tfs-mt"/>
-    </a>
-    <a href="https://pypi.org/project/tfs-mt/" alt="PyPi monthly downloads">
-        <img src="https://img.shields.io/pypi/dm/tfs-mt"/>
-    </a>
+<a href="https://github.com/Giovo17/tfs-mt/releases" alt="Release">
+    <img src="https://img.shields.io/github/v/release/Giovo17/tfs-mt"/></a>
+<a href="https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain" alt="Build status">
+<img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main"/></a>
+<a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
+    <img src="https://img.shields.io/github/license/Giovo17/tfs-mt"/></a>
+<a href="https://pypi.org/project/tfs-mt/" alt="PyPi monthly downloads">
+    <img src="https://img.shields.io/pypi/dm/tfs-mt"/></a>
 
-    <br>
+<br>
 
-    <a href="https://github.com/Giovo17/tfs-mt">
-        🏠 Homepage
-    </a>
-    •
-    <a href="#getting-started">
-        ▶️ Getting started
-    </a>
-    •
-    <a href="https://huggingface.co/giovo17/tfs-mt">
-        🤗 Hugging Face
-    </a>
-    •
-    <a href="https://huggingface.co/spaces/giovo17/tfs-mt-demo">
-        🎬 Demo
-    </a>
+<a href="https://github.com/Giovo17/tfs-mt">
+    🏠 Homepage
+</a>
+•
+<a href="#getting-started">
+    ▶️ Getting started
+</a>
+•
+<a href="https://huggingface.co/giovo17/tfs-mt">
+    🤗 Hugging Face
+</a>
+•
+<a href="https://huggingface.co/spaces/giovo17/tfs-mt-demo">
+    🎬 Demo
+</a>
 
 </div>
 

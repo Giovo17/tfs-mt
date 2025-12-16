@@ -30,6 +30,8 @@ dependencies = [
     "transformers>=4.57.1",
     "types-pyyaml>=6.0.12.20250822",
     "types-requests>=2.32.4.20250809",
+    "zensical>=0.0.11",
+    "mkdocstrings[python]>=1.0.0",
 ]
 
 [project.urls]
@@ -41,17 +43,11 @@ Documentation = "https://giovo17.github.io/tfs-mt/"
 dev = [
     "pytest>=8.4.1",
     "prek>=0.2.9",
-    "tox-uv>=1.26.2",
     "ty>=0.0.1a27",
     "ruff>=0.12.7",
-    "mkdocs>=1.6.1",
-    "mkdocs-material>=9.6.16",
-    "mkdocstrings[python]>=0.30.0",
     "ipykernel>=6.30.1",
     "skops>=0.13.0",
-    "mkdocs-drawio>=1.11.2",
     "torchinfo>=1.8.0",
-    "ipywidgets>=8.1.7",
     "seaborn>=0.13.2",
     "wandb>=0.22.1", #"wandb==0.19.11",
     "python-dotenv>=1.1.1",
@@ -60,8 +56,6 @@ dev = [
     "pynvml<12",
     "trackio>=0.9.1",
     "moto>=5.1.14",
-    "mkdocs-bibtex>=4.4.0",
-    "mkdocs-glightbox>=0.5.2",
 ]
 
 [build-system]

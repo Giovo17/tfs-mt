@@ -111,28 +111,6 @@ class BaseTokenizer(ABC):
         pass
 
 
-def parse_glove_tokens(lines: list[str]) -> list[str]:
-    """Parse a chunk of GloVe embeddings file into a list of tokens.
-
-    For each line it removes any extra spaces, splits it by spaces and take the first part building the tokens' list.
-
-    It skips "malformed" tokens to avoid duplicates in vocabulary.
-    The GloVe file contains tokens with spaces inside, eg. `103 3/4`, which are not handled by the tokenizer for simplicity.
-    """
-    result = []
-    for line in lines:
-        parts = line.strip().split()
-        try:
-            float(parts[1])
-        except ValueError:
-            continue
-        else:
-            token = parts[0].lower()
-            result.append(token)
-
-    return result
-
-
 def download_glove(output_dir: str, glove_version: str = "glove.2024.wikigiga.50d") -> str:
     """Download GloVe embeddings and returns the filepath."""
     glove_folder_path = output_dir + f"/{glove_version}"
@@ -397,9 +375,11 @@ class WordTokenizer(BaseTokenizer):
     def tokenize(self, text: str) -> list[str]:
         """Tokenizer based on GloVe word tokenizer in order to let the model be compatible with GloVe pretrained embeddings.
 
-        Max word length is 1000. Contractions are treated as distinct tokens, eg. `n't`, `'s`, `'ll`.
+        Note:
+            Max word length is 1000. Contractions are treated as distinct tokens, eg. `n't`, `'s`, `'ll`.
 
-        Reference: [GloVe source code](https://github.com/stanfordnlp/GloVe/blob/master/src/common.c#L75)
+        Note: Reference
+            GloVe tokenizer source code available [here](https://github.com/stanfordnlp/GloVe/blob/master/src/common.c#L75)
 
         Args:
             text (str): text to be tokenized.
@@ -468,8 +448,10 @@ class WordTokenizer(BaseTokenizer):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Tokenizer encode function.
 
-        It also returns the mask to be used during attention in order not compute it with respect to PAD tokens.
-        The mask is designed to True where there's a token with the model has to compute attention to, False otherwise.
+        It also returns the mask to be used during attention in order not compute it with respect to `PAD` tokens.
+
+        Note:
+            The mask is designed to be True where there's a token with the model has to compute attention to, False otherwise.
 
         Args:
             input_sequence (str | list[str] | np.ndarray | torch.Tensor): Sequence to be encoded or already encoded (useful in decoding stage when this method is only used to provide the mask).
@@ -679,9 +661,15 @@ def batch_collate_fn(
     In order to correctly build a batch every sequence in it has to have the same length,
     so it pads the small sequences to the longest one. It does it for `src`, `tgt`, `src_mask` and `tgt_mask`.
 
-    This function needs a two pad token ids since in this Trasformer implementation there are 2 distinct tokenizers
-    with their own vocabulary.
-    Each vocabulary is built independently and in parallel, so there's no guarantee that the `pad_token` will have the same ID in both.
+    Note:
+        This function needs two `PAD` token ids since in this Trasformer implementation there are 2 distinct tokenizers
+        with their own vocabulary.
+        Each vocabulary is built independently and in parallel, so there's no guarantee that it will have the same ID in both.
+
+    Tip:
+        By padding all sequences in the dataset to the same length higher GPU usage can achieved.
+
+        It has to be coupled with `torch.compile` usage and with the dynamic cudagraph compilation disabled (`torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = False`)
 
     Args:
         batch (dict[str, torch.Tensor  |  list[str]]): Batch of token ids and masks.

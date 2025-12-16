@@ -62,8 +62,11 @@ class Embedding(nn.Module):
 
     This implementation uses a randomly initialized embedding lookup table with dimension `[vocab_size, d_model]`.
 
-    There's the possibility of loading pretrained embeddings from GloVe. This choice has been made to achieve acceptable
-    performances with low resources training and limited time training.
+    Note: There's the possibility of loading pretrained embeddings from GloVe.
+        This choice has been made to achieve acceptable performances with low resources training and limited time training.
+
+    Note:
+        GloVe embeddings available for English only.
 
     Args:
         vocab_size (int): Number of tokens in vocabulary.
