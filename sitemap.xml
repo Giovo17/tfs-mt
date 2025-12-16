@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://giovo17.github.io/tfs-mt/</loc>
+         <lastmod>2025-12-16</lastmod>
+    </url>
+    <url>
+         <loc>https://giovo17.github.io/tfs-mt/architecture_explain/</loc>
+         <lastmod>2025-12-16</lastmod>
+    </url>
+    <url>
+         <loc>https://giovo17.github.io/tfs-mt/modules/architecture/</loc>
+         <lastmod>2025-12-16</lastmod>
+    </url>
+    <url>
+         <loc>https://giovo17.github.io/tfs-mt/modules/data_utils/</loc>
+         <lastmod>2025-12-16</lastmod>
+    </url>
+    <url>
+         <loc>https://giovo17.github.io/tfs-mt/modules/decoding_utils/</loc>
+         <lastmod>2025-12-16</lastmod>
+    </url>
+    <url>
+         <loc>https://giovo17.github.io/tfs-mt/modules/embeddings/</loc>
+         <lastmod>2025-12-16</lastmod>
+    </url>
+    <url>
+         <loc>https://giovo17.github.io/tfs-mt/modules/training_utils/</loc>
+         <lastmod>2025-12-16</lastmod>
+    </url>
+</urlset>
