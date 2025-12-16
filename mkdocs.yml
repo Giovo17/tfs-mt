@@ -7,20 +7,17 @@ edit_uri: edit/main/docs/
 repo_name: Giovo17/tfs-mt
 copyright: Maintained by <a href="https://giovannispadaro.it">Giovanni Spadaro</a>.
 
-
 nav:
   - Home: index.md
   - Architecture: architecture_explain.md
   - Modules:
-    - Architecture: modules/architecture.md
-    - Embeddings: modules/embeddings.md
-    - Data utils: modules/data_utils.md
-    - Training utils: modules/training_utils.md
-    - Decoding utils: modules/decoding_utils.md
-
+      - Architecture: modules/architecture.md
+      - Embeddings: modules/embeddings.md
+      - Data utils: modules/data_utils.md
+      - Training utils: modules/training_utils.md
+      - Decoding utils: modules/decoding_utils.md
 
 theme:
-  name: material
   features:
     - announce.dismiss
     - content.action.edit
@@ -51,20 +48,26 @@ theme:
     # - toc.integrate
   language: en
   palette:
-    - media: "(prefers-color-scheme: dark)"
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
       scheme: default
-      primary: white
-      accent: deep green
       toggle:
-        icon: material/brightness-7
+        icon: lucide/sun-moon
+        name: Switch to light mode
+      accent: green
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      toggle:
+        icon: lucide/sun
         name: Switch to dark mode
+      accent: green
+    # Palette toggle for dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: black
-      accent: deep green
       toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
+        icon: lucide/moon
+        name: Switch to system preference
+      accent: green
   icon:
     repo: fontawesome/brands/github
 
@@ -75,34 +78,18 @@ extra:
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/tfs-mt
 
-
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
           paths: ["tfs_mt"]
-  - bibtex:
-      bib_file: "docs/architecture_explain/references.bib"
-      bib_by_default: False
-  - drawio
-  - glightbox:
-      touchNavigation: true
-      loop: false
-      effect: zoom
-      slide_effect: slide
-      width: 100%
-      height: auto
-      zoomable: true
-      draggable: true
-      skip_classes:
-        - custom-skip-class-name
-      auto_themed: false
-      auto_caption: false
-      caption_position: bottom
-      background: white
-      shadow: true
-      manual: false
+          inventories:
+            - https://docs.python.org/3/objects.inv
+          options:
+            docstring_style: google
+            inherited_members: true
+            show_source: true
 
 markdown_extensions:
   - toc:

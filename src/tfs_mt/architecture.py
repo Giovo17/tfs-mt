@@ -59,7 +59,8 @@ class InvalidFileExtensionException(Exception):
 class MultiHeadAttention(nn.Module):
     """MultiHead Attention for Transformer encoder and decoder. It handles both self and cross attention operations.
 
-    Following the implementation described in *Speech and Language Processing* by *Daniel Jurafsky* [[link](https://web.stanford.edu/~jurafsky/slp3/)].
+    Note: Implementation reference
+        Following the implementation described in *Speech and Language Processing* by *Daniel Jurafsky* [[link](https://web.stanford.edu/~jurafsky/slp3/)].
 
     Args:
         d_model (int): Model dimension.
@@ -253,7 +254,11 @@ class EncoderBlock(nn.Module):
     def postnorm_forward(
         self, x: Float[torch.Tensor, "B S D"], attention_mask: Bool[torch.Tensor, "B 1 S S"]
     ) -> Float[torch.Tensor, "B S D"]:
-        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/abs/2305.09312."""
+        """Original Postnorm forward function.
+
+        Tip:
+            Accoding to this [paper](https://arxiv.org/abs/2305.09312) it outperforms Prenorm in zero-shot Machine Translation.
+        """
         t1 = self.self_attention(x_query=x, x_key=x, x_value=x, attention_mask=attention_mask)
         # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
         t2 = self.dropout(t1)
@@ -270,7 +275,7 @@ class EncoderBlock(nn.Module):
     def prenorm_forward(
         self, x: Float[torch.Tensor, "B S D"], attention_mask: Bool[torch.Tensor, "B 1 S S"]
     ) -> Float[torch.Tensor, "B S D"]:
-        """Prenorm forward function. More on https://arxiv.org/abs/2002.04745."""
+        """Prenorm forward function. Learn more [here](https://arxiv.org/abs/2002.04745)."""
         t1 = self.layer_norm1(x)
         t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=attention_mask)
         t3 = self.dropout(t2)
@@ -288,8 +293,6 @@ class EncoderBlock(nn.Module):
 
 class DecoderBlock(nn.Module):
     """Transformer Decoder block.
-
-    Using prenorm approach as in EncoderBlock.
 
     Args:
         d_model (int): Model dimension.
@@ -332,7 +335,11 @@ class DecoderBlock(nn.Module):
         tgt_mask: Bool[torch.Tensor, "B 1 S S"],
         src_mask: Bool[torch.Tensor, "B 1 S S"],
     ) -> torch.Tensor:
-        """Original Postnorm forward function. Accoding to the following paper it outperforms Prenorm in zero-shot machine translation, https://arxiv.org/abs/2305.09312."""
+        """Original Postnorm forward function.
+
+        Tip:
+            Accoding to this [paper](https://arxiv.org/abs/2305.09312) it outperforms Prenorm in zero-shot Machine Translation.
+        """
         t1 = self.self_attention(x_query=x, x_key=x, x_value=x, attention_mask=tgt_mask)
         # We apply dropout to the output of each sub-layer, before it is added to the sub-layer input and normalized (Attention is all you need page 8)
         t2 = self.dropout(t1)
@@ -361,7 +368,7 @@ class DecoderBlock(nn.Module):
         tgt_mask: Bool[torch.Tensor, "B 1 S S"],
         src_mask: Bool[torch.Tensor, "B 1 S S"],
     ) -> torch.Tensor:
-        """Prenorm forward function. More on https://arxiv.org/abs/2002.04745."""
+        """Prenorm forward function. Learn more [here](https://arxiv.org/abs/2002.04745)."""
         t1 = self.layer_norm1(x)
         t2 = self.self_attention(x_query=t1, x_key=t1, x_value=t1, attention_mask=tgt_mask)
         t3 = self.dropout(t2)
@@ -703,7 +710,7 @@ def build_model(
     ):
         config.model_configs.pretrained_word_embeddings = None
 
-    # NOTE GloVe embeddings available only for English language
+    # NOTE GloVe embeddings available for English only
     if (
         config.dataset.src_lang != "en" and config.dataset.tgt_lang != "en"
     ) or config.model_configs.pretrained_word_embeddings is None:

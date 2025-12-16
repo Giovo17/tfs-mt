@@ -267,15 +267,15 @@ def setup_exp_logging(
 ) -> WandBLogger | tuple[WandBLogger, TrackioLogger]:
     """Setup Experiment Tracking with WandB and Trackio loggers.
 
-    Using common.setup_wandb_logging which setup an ignite's Engine compatible WandB logger.
-    It takes as kwargs wandb.init compatible arguments.
-    Same for trackio.
+    Using `common.setup_wandb_logging` which setup an ignite's Engine compatible WandB logger.
+    It takes as kwargs `wandb.init` compatible arguments.
+    Same for `trackio`.
 
-    References:
-    1. setup_wandb_logging documentation [[link](https://docs.pytorch.org/ignite/contrib/engines.html#ignite.contrib.engines.common.setup_wandb_logging)]
-    2. WandBLogger documentation [[link](https://docs.pytorch.org/ignite/generated/ignite.handlers.wandb_logger.html#ignite.handlers.wandb_logger.WandBLogger)]
-    3. wandb.init documentation [[link](https://docs.wandb.ai/models/ref/python/functions/init)]
-    4. trackio.init documentation [[link](https://huggingface.co/docs/trackio/en/api#trackio.init)]
+    Note: References
+        1. `setup_wandb_logging` documentation page [[link](https://docs.pytorch.org/ignite/contrib/engines.html#ignite.contrib.engines.common.setup_wandb_logging)]
+        2. `WandBLogger` documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.handlers.wandb_logger.html#ignite.handlers.wandb_logger.WandBLogger)]
+        3. `wandb.init` documentation page [[link](https://docs.wandb.ai/models/ref/python/functions/init)]
+        4. `trackio.init` documentation page [[link](https://huggingface.co/docs/trackio/en/api#trackio.init)]
     """
 
     wandb_logger = WandBLogger(
@@ -431,9 +431,9 @@ def nlp_metric_transform(
 ) -> tuple[list[list[str]], list[list[list[str]]]]:
     """Transform `eval_one_iter` output to be compliant with ignite nlp metrics.
 
-    References:
-    1. Bleu documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Bleu.html)]
-    2. Rouge documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Rouge.html)]
+    Note: References
+        1. Bleu documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Bleu.html)]
+        2. Rouge documentation page [[link](https://docs.pytorch.org/ignite/generated/ignite.metrics.Rouge.html)]
 
     Args:
         output (tuple[torch.Tensor, torch.Tensor]): Output of `eval_one_iter`.
@@ -496,6 +496,7 @@ def get_param_groups(
     """Create parameter groups for optimizer with selective weight decay application.
 
     Parameters excluded from weight decay:
+
     - Bias terms
     - Layer normalization weights
     - Embedding weights
