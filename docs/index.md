@@ -1,27 +1,45 @@
-<h1 align="center">tfs-mt</h1>
+<h1 align="center">tfs-mt<br>
+Transformer from scratch for Machine Translation</h1>
 
 <div align="center">
-    <a href="https://img.shields.io/github/v/release/Giovo17/tfs-mt" alt="Release">
-        <img src="https://img.shields.io/github/v/release/Giovo17/tfs-mt"/></a>
+    <a href="https://github.com/Giovo17/tfs-mt/releases" alt="Release">
+        <img src="https://img.shields.io/github/v/release/Giovo17/tfs-mt"/>
+    </a>
     <a href="https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain" alt="Build status">
-      <img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main" /></a>
+      <img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main"/>
+    </a>
     <a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
-        <img src="https://img.shields.io/github/license/Giovo17/tfs-mt" /></a>
-    <a href="https://github.com/Giovo17/tfs-mt" alt="GitHub">
-        <img src="https://img.shields.io/badge/github-repo-blue?logo=github"/></a>
-    <a href="https://huggingface.co/giovo17/tfs-mt" alt="Hugging Face">
-        <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-tfs--mt-ffc107?color=ffc107&logoColor=white"/></a>
-    <a href="https://huggingface.co/spaces/giovo17/tfs-mt-demo" alt="Demo app">
-        <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Demo%20app-tfs--mt--demo-ffc107?color=ffc107&logoColor=white"/></a>
+        <img src="https://img.shields.io/github/license/Giovo17/tfs-mt"/>
+    </a>
     <a href="https://pypi.org/project/tfs-mt/" alt="PyPi monthly downloads">
-        <img src="https://img.shields.io/pypi/dm/tfs-mt"/></a>
+        <img src="https://img.shields.io/pypi/dm/tfs-mt"/>
+    </a>
+
+    <br>
+
+    <a href="https://github.com/Giovo17/tfs-mt">
+        🏠 Homepage
+    </a>
+    •
+    <a href="#getting-started">
+        ▶️ Getting started
+    </a>
+    •
+    <a href="https://huggingface.co/giovo17/tfs-mt">
+        🤗 Hugging Face
+    </a>
+    •
+    <a href="https://huggingface.co/spaces/giovo17/tfs-mt-demo">
+        🎬 Demo
+    </a>
 
 </div>
 
+---
 
 This project implements the Transformer architecture from scratch considering Machine Translation as the usecase. It's mainly intended as an educational resource and a functional implementation of the architecture and the training/inference logic.
 
-## Getting Started
+## Getting started
 
 ### From pip
 
@@ -76,7 +94,7 @@ The whole project parameters can be configured in `src/tfs_mt/configs/config.yml
 
 For a detailed explanation of the architecture and design choices, please refer to the [Architecture Documentation](https://giovo17.github.io/tfs-mt/architecture_explain/).
 
-### Model Sizes
+### Model sizes
 
 The project supports various model configurations to suit different computational resources:
 
