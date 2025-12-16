@@ -15,8 +15,6 @@ Transformer from scratch for Machine Translation</h1>
         <img src="https://img.shields.io/pypi/dm/tfs-mt"/>
     </a>
 
-    <br>
-
     [▶️ Getting started](#getting-started) • [📖 Documentation](https://giovo17.github.io/tfs-mt) • [🤗 Hugging Face](https://huggingface.co/giovo17/tfs-mt) • [🎬 Demo](https://huggingface.co/spaces/giovo17/tfs-mt-demo)
 
 </div>
