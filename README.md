@@ -70,9 +70,13 @@ The whole project parameters can be configured in `src/tfs_mt/configs/config.yml
 - **Training**: Optimizer, Learning rate scheduler, number of epochs, ...
 - **Data**: Dataset, Dataloader, Tokenizer, ...
 
-## Architecture
+## Technical walkthrough
 
-For a detailed explanation of the architecture and design choices, please refer to the [Architecture Documentation](https://giovo17.github.io/tfs-mt/architecture_explain/).
+The technical breakdown of the architecture and the training/inference workflows can be found here:
+
+- [Architecture](https://giovo17.github.io/tfs-mt/architecture_explain/)
+
+- [Training and Inference](https://giovo17.github.io/tfs-mt/training_inference/introduction/)
 
 ### Model Sizes
 

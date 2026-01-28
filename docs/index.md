@@ -91,25 +91,6 @@ The whole project parameters can be configured in `src/tfs_mt/configs/config.yml
 - **Training**: Optimizer, Learning rate scheduler, number of epochs, ...
 - **Data**: Dataset, Dataloader, Tokenizer, ...
 
-## Architecture
-
-For a detailed explanation of the architecture and design choices, please refer to the [Architecture Documentation](https://giovo17.github.io/tfs-mt/architecture_explain/).
-
-### Model sizes
-
-The project supports various model configurations to suit different computational resources:
-
-| Parameter                | Nano     | Small    | Base     | Original |
-| :----------------------- | :------- | :------- | :------- | :------- |
-| **Encoder Layers** | 4        | 6        | 8        | 6        |
-| **Decoder Layers** | 4        | 6        | 8        | 6        |
-| **d_model**        | 50       | 100      | 300      | 512      |
-| **Num Heads**      | 4        | 6        | 8        | 8        |
-| **d_ff**           | 200      | 400      | 800      | 2048     |
-| **Norm Type**      | PostNorm | PostNorm | PostNorm | PostNorm |
-| **Dropout**        | 0.1      | 0.1      | 0.1      | 0.1      |
-| **GloVe Dim**      | 50d      | 100d     | 300d     | -        |
-
 
 ## License
 
