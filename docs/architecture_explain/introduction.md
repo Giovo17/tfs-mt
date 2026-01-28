@@ -19,7 +19,7 @@ This approach stands in contrast to earlier paradigms of sequence modeling that 
 
 The first proposed workflow of a Transformer-based model follows the **encoder–decoder** paradigm and it has been employed for **Machine Translation**. The encoder maps a source sequence into a set of high-dimensional contextual embeddings using stacked self-attention and feed-forward layers. The decoder then generates the target sequence autoregressively, conditioning each output element on both the encoder representations and previously generated tokens.
 
-![Architecture schema](../../assets/img/architecture_schema.png){ loading=lazy }
+![Architecture schema](../assets/img/architecture_schema.png){ loading=lazy }
 /// figure-caption
 Overall architecture scheme.
 ///
