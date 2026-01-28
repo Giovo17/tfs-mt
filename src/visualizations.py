@@ -12,6 +12,7 @@
 import os
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
@@ -42,7 +43,9 @@ def load_model_and_tokenizers():
     return model, src_tokenizer, tgt_tokenizer
 
 
-def display_attention_matrix(pad_len: int = 9, annot_threshold: float = 0.05):
+def display_attention_matrix(
+    selected_layer: int = -1, selected_attention_head: int = 0, pad_len: int = 9, annot_threshold: float = 0.05
+):
     model, src_tokenizer, _ = load_model_and_tokenizers()
 
     example_en_string = "The Transformer architecture was introduced in 2017"
@@ -62,13 +65,14 @@ def display_attention_matrix(pad_len: int = 9, annot_threshold: float = 0.05):
         _ = model.encode(src_sequence, src_mask)
 
     # Select the attention weights of the last encoder layer
-    attn_weights = model.encoder[-1].self_attention.attn_weights
-    # Select the first head and the first and only element in the batch
-    attn_weights = attn_weights[0, 0, :, :]
+    attn_weights = model.encoder[selected_layer].self_attention.attn_weights
+    # Select the head and the first and only element in the batch
+    attn_weights = attn_weights[0, selected_attention_head, :, :]
     # The last rows of the attention matrix associated with padding results in nan values.
     # Replacing them with zeros for better visualization
     attn_weights = torch.where(torch.isnan(attn_weights), torch.zeros_like(attn_weights), attn_weights)
 
+    # Attention mask has shape [B, 1, 1, S] cause the mask is the across every head
     attn_mask = model.attention_mask[0, 0, :, :]
 
     attn_weights = pd.DataFrame(attn_weights.detach().numpy())
@@ -96,16 +100,16 @@ def display_attention_matrix(pad_len: int = 9, annot_threshold: float = 0.05):
                 ax.plot([j, j + 1], [i, i + 1], color="red", linewidth=1)
                 ax.plot([j + 1, j], [i, i + 1], color="red", linewidth=1)
 
-    plt.xticks(rotation=45, ha="right", fontsize=13)
-    plt.yticks(rotation=0, fontsize=13)
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
     plt.tight_layout()
-
-    os.makedirs(os.path.join(os.getcwd(), "docs/architecture_explain/img"), exist_ok=True)
-    plt.savefig(os.path.join(os.getcwd(), "docs/architecture_explain/img/attention_matrix.png"))
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/attention_matrix.png"))
     plt.show()
 
 
-def display_causal_attention_matrix(pad_len: int = 9, annot_threshold: float = 0.05):
+def display_causal_attention_matrix(
+    selected_layer: int = -1, selected_attention_head: int = 0, pad_len: int = 9, annot_threshold: float = 0.05
+):
     model, src_tokenizer, tgt_tokenizer = load_model_and_tokenizers()
 
     example_en_string = "The Transformer architecture was introduced in 2017"
@@ -130,11 +134,12 @@ def display_causal_attention_matrix(pad_len: int = 9, annot_threshold: float = 0
         _ = model.decode(tgt_sequence, encoder_representation, tgt_mask_tensor, src_mask_tensor)
 
     # Select the attention weights of the last decoder layer
-    attn_weights = model.decoder[-1].self_attention.attn_weights
-    # Select the first head and the first and only element in the batch
-    attn_weights = attn_weights[0, 0, :, :]
+    attn_weights = model.decoder[selected_layer].self_attention.attn_weights
+    # Select the head and the first and only element in the batch
+    attn_weights = attn_weights[0, selected_attention_head, :, :]
     attn_weights = torch.where(torch.isnan(attn_weights), torch.zeros_like(attn_weights), attn_weights)
 
+    # Attention mask has shape [B, 1, 1, S] cause the mask is the across every head
     causal_attn_mask = model.causal_attention_mask[0, 0, :, :]
 
     attn_weights = pd.DataFrame(attn_weights.detach().numpy())
@@ -161,25 +166,28 @@ def display_causal_attention_matrix(pad_len: int = 9, annot_threshold: float = 0
                 ax.plot([j, j + 1], [i, i + 1], color="red", linewidth=1)
                 ax.plot([j + 1, j], [i, i + 1], color="red", linewidth=1)
 
-    plt.xticks(rotation=45, ha="right", fontsize=13)
-    plt.yticks(rotation=0, fontsize=13)
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
     plt.tight_layout()
-
-    os.makedirs(os.path.join(os.getcwd(), "docs/architecture_explain/img"), exist_ok=True)
-    plt.savefig(os.path.join(os.getcwd(), "docs/architecture_explain/img/causal_attention_matrix.png"))
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/causal_attention_matrix.png"))
     plt.show()
 
 
-def display_cross_attention_matrix(pad_len: int = 9, annot_threshold: float = 0.05):
+def display_cross_attention_matrix(
+    selected_layer: int = -1,
+    selected_attention_head: int = 0,
+    src_text: str = "The Transformer architecture was introduced in 2017",
+    tgt_text: str = "L'architettura Transformer è stata introdotta nel 2017",
+    pad_len: int = 9,
+    annot_threshold: float = 0.05,
+    save_path: str = "cross_attention_matrix.png",
+):
     model, src_tokenizer, tgt_tokenizer = load_model_and_tokenizers()
 
-    example_en_string = "The Transformer architecture was introduced in 2017"
-    example_it_string = "L'architettura Transformer è stata introdotta nel 2017"
-
-    src_tokens = src_tokenizer.tokenize(example_en_string)
+    src_tokens = src_tokenizer.tokenize(src_text)
     src_token_ids, src_mask = src_tokenizer.encode(src_tokens, pad_to_len=pad_len)
 
-    tgt_tokens = tgt_tokenizer.tokenize(example_it_string)
+    tgt_tokens = tgt_tokenizer.tokenize(tgt_text)
 
     tgt_token_ids, tgt_mask = tgt_tokenizer.encode(tgt_tokens, pad_to_len=pad_len)
 
@@ -196,11 +204,12 @@ def display_cross_attention_matrix(pad_len: int = 9, annot_threshold: float = 0.
         _ = model.decode(tgt_sequence, encoder_representation, tgt_mask_tensor, src_mask_tensor)
 
     # Select the attention weights of the last decoder layer
-    attn_weights = model.decoder[-1].cross_attention.attn_weights
-    # Select the first head and the first and only element in the batch
-    attn_weights = attn_weights[0, 0, :, :]
+    attn_weights = model.decoder[selected_layer].cross_attention.attn_weights
+    # Select the head and the first and only element in the batch
+    attn_weights = attn_weights[0, selected_attention_head, :, :]
     attn_weights = torch.where(torch.isnan(attn_weights), torch.zeros_like(attn_weights), attn_weights)
 
+    # Attention mask has shape [B, 1, 1, S] cause the mask is the across every head
     cross_attn_mask = model.cross_attention_mask[0, 0, :, :]
 
     attn_weights = pd.DataFrame(attn_weights.detach().numpy())
@@ -227,12 +236,10 @@ def display_cross_attention_matrix(pad_len: int = 9, annot_threshold: float = 0.
                 ax.plot([j, j + 1], [i, i + 1], color="red", linewidth=1)
                 ax.plot([j + 1, j], [i, i + 1], color="red", linewidth=1)
 
-    plt.xticks(rotation=45, ha="right", fontsize=13)
-    plt.yticks(rotation=0, fontsize=13)
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
     plt.tight_layout()
-
-    os.makedirs(os.path.join(os.getcwd(), "docs/architecture_explain/img"), exist_ok=True)
-    plt.savefig(os.path.join(os.getcwd(), "docs/architecture_explain/img/cross_attention_matrix.png"))
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/", save_path))
     plt.show()
 
 
@@ -250,9 +257,79 @@ def display_positional_encoding():
     plt.xlabel("Embedding Dimension")
     plt.ylabel("Sequence Position")
     plt.tight_layout()
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/positional_encoding.png"))
+    plt.show()
 
-    os.makedirs(os.path.join(os.getcwd(), "docs/architecture_explain/img"), exist_ok=True)
-    plt.savefig(os.path.join(os.getcwd(), "docs/architecture_explain/img/positional_encoding.png"))
+
+def display_sinusoidal_signals():
+    fig, axes = plt.subplots(8, 1, figsize=(10, 6), sharex=True)
+
+    t = np.linspace(0, 1024, num=1024)
+
+    pos_encoder = SinusoidalPositionalEncoding(
+        d_model=8,
+        max_sequence_length=1024,
+    )
+
+    x_pin_index = 407
+
+    for _, (ax, i) in enumerate(zip(axes, range(8), strict=False)):
+        signal = pos_encoder.pe_lut[:, i]
+
+        ax.plot(t, signal)
+
+        y_label = round(signal.numpy()[x_pin_index], 2)
+        ax.set_ylabel(y_label, rotation=0, labelpad=20, fontsize=20, color="black", weight="bold")
+        ax.yaxis.set_label_coords(-0.05, 0.10)
+
+        ax.set_yticks([])
+
+        for spine in ax.spines.values():
+            spine.set_linewidth(0)
+
+        ax.grid(False)
+
+    # Add vertical line to show the values of this pseudo positional embedding at example index
+    for ax in axes:
+        ax.axvline(x=x_pin_index, color="#000000", linewidth=3, linestyle="-", alpha=0.8)
+
+    plt.xlim(0, 1024)
+    plt.tight_layout()
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/sinusoidal_signals.png"))
+    plt.show()
+
+
+def display_square_wave_signals():
+    fig, axes = plt.subplots(8, 1, figsize=(10, 6), sharex=True)
+
+    periods = [8, 16, 32, 64, 128, 256, 512, 1024]
+    t = np.linspace(0, 1024, num=1024)
+    x_pin_index = 407
+
+    for _, (ax, period) in enumerate(zip(axes, periods, strict=False)):
+        # Square wave signal
+        signal = 1 - (np.mod(t, period) < period / 2).astype(int)
+
+        ax.step(t, signal, where="post", linewidth=1.5)
+        ax.fill_between(t, 0, signal, step="post", alpha=0.1)
+
+        ax.set_ylabel(signal[x_pin_index], rotation=0, labelpad=20, fontsize=20, color="black", weight="bold")
+        ax.yaxis.set_label_coords(-0.05, 0.10)
+
+        ax.set_yticks([])
+
+        for spine in ax.spines.values():
+            spine.set_linewidth(0)
+
+        ax.grid(False)
+
+    # Add vertical line to show the values of this pseudo positional embedding at example index
+    for ax in axes:
+        ax.axvline(x=x_pin_index, color="#000000", linewidth=3, linestyle="-", alpha=0.8)
+
+    plt.xlim(0, 1024)
+    plt.tight_layout()
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/square_wave_signals.png"))
     plt.show()
 
 
@@ -292,14 +369,12 @@ def display_lr_schedule_wsd(config):
             scheduler.step()
             global_step += 1
 
-    plt.figure(figsize=(8, 4))
+    plt.figure(figsize=(10, 5))
     sns.lineplot(x=list(range(len(lrs))), y=lrs)
     plt.xlabel("Step")
     plt.ylabel("Learning rate")
     plt.tight_layout()
-    plt.savefig(
-        os.getcwd() + f"/docs/architecture_explain/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"
-    )
+    plt.savefig(os.getcwd() + f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png")
     plt.show()
 
 
@@ -319,7 +394,7 @@ def display_lr_schedule_original(config):
     criterion = CrossEntropyLoss()
     optimizer = AdamW(model.parameters(), lr=1)
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 5))
 
     graph_configs = [(100, 10000), (256, 10000), (256, 15000)]
     for d_model, warmup_iters in graph_configs:
@@ -351,9 +426,7 @@ def display_lr_schedule_original(config):
     plt.ylabel("Learning rate")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(
-        os.getcwd() + f"/docs/architecture_explain/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"
-    )
+    plt.savefig(os.getcwd() + f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png")
     plt.show()
 
 
@@ -385,12 +458,78 @@ def display_label_smoothing(config):
 
     heatmap_data = LS_data.pivot(index="rows", columns="columns", values="target distribution")
 
-    plt.figure(figsize=(4, 4))  # roughly equivalent to 200x200 pixels
+    plt.figure(figsize=(6, 6))
     sns.heatmap(heatmap_data, cmap="viridis", cbar_kws={"label": "target distribution"}, square=True)
     plt.xlabel(None)
     plt.ylabel(None)
     plt.tight_layout()
-    plt.savefig(os.getcwd() + "/docs/architecture_explain/img/label_smoothing.png")
+    plt.savefig(os.getcwd() + "/docs/assets/img/label_smoothing.png")
+    plt.show()
+
+
+def display_training_loss(config, csv_path):
+    df = pd.read_csv(csv_path)
+
+    plt.figure(figsize=(10, 6))
+
+    # Smoothed loss with Exponential Moving Average
+    df["smoothed_loss"] = df["training/train_loss"].ewm(span=20).mean()
+
+    sns.lineplot(data=df, x="_step", y="training/train_loss", label="Loss", color="blue")
+    # Smoothed loss
+    sns.lineplot(data=df, x="_step", y="smoothed_loss", label="Loss (EMA)", color="blue", alpha=0.5)
+
+    # Add vertical lines for epoch boundaries
+    iters_per_epoch = config.num_train_iters_per_epoch
+    max_step = df["_step"].max()
+    for i in range(1, int(max_step // iters_per_epoch) + 1):
+        plt.axvline(x=i * iters_per_epoch, color="red", linestyle="--", alpha=0.2)
+
+    plt.title("Training loss")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.xlim(left=0)
+    plt.ylim(bottom=0)
+    plt.legend(loc="upper right")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.getcwd() + "/docs/assets/img/training_loss.png")
+    plt.show()
+
+
+def display_performance_metrics(csv_path):
+    df = pd.read_csv(csv_path)
+
+    metrics_map = {
+        "test_eval/Bleu": "BLEU",
+        # "test_eval/Bleu_smooth_2": "BLEU_smooth_2",
+        "test_eval/Rouge/Rouge-L-F": "ROUGE-L-F",
+        # "test_eval/Rouge/Rouge-L-P": "ROUGE-L-P",
+        # "test_eval/Rouge/Rouge-L-R": "ROUGE-L-R",
+        "test_eval/Rouge/Rouge-2-F": "ROUGE-2-F",
+        # "test_eval/Rouge/Rouge-2-P": "ROUGE-2-P",
+        # "test_eval/Rouge/Rouge-2-R": "ROUGE-2-R",
+    }
+
+    available_metrics = list(metrics_map)
+
+    # Melt the dataframe to have a metric column that later will be used as hue
+    melted_df = df.melt(id_vars=["_step"], value_vars=available_metrics, var_name="Metric", value_name="Score")
+    melted_df = melted_df.dropna(subset=["Score"])
+
+    melted_df["Metric"] = melted_df["Metric"].map(metrics_map)  # Map original column names to display labels
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=melted_df, x="_step", y="Score", hue="Metric", marker="o")
+
+    plt.title("Performance metrics")
+    plt.xlabel("Step")
+    plt.ylabel("Score")
+    plt.xlim(left=-2500)
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.getcwd() + "/docs/assets/img/performance_metrics.png")
     plt.show()
 
 
@@ -398,28 +537,44 @@ if __name__ == "__main__":
     config_path = os.path.join(os.getcwd(), "src/tfs_mt/configs/config.yml")
     config = OmegaConf.load(config_path)
 
-    # Attention matrix -------------------------------------------------------------------------------------------------------------------------
+    sns.set_context("talk", font_scale=0.95, rc={"font.size": 14})
+
+    os.makedirs(os.path.join(os.getcwd(), "docs/assets/img"), exist_ok=True)
+
+    # Attention matrix ------------------------------------------------------------------------------------------------
 
     config.chosen_model_size = "small"
 
-    display_attention_matrix()
-    display_causal_attention_matrix()
-    display_cross_attention_matrix()
+    selected_layer = -1
+    selected_attention_head = 1
 
-    # Positional Encoding ----------------------------------------------------------------------------------------------------------------------
+    display_attention_matrix(selected_layer, selected_attention_head)
+    display_causal_attention_matrix(selected_layer, selected_attention_head)
+    display_cross_attention_matrix(selected_layer, selected_attention_head)
+
+    # Positional Encoding ---------------------------------------------------------------------------------------------
 
     display_positional_encoding()
+    display_sinusoidal_signals()
+    display_square_wave_signals()
 
-    # LR scheduler -----------------------------------------------------------------------------------------------------------------------------
+    # LR scheduler ----------------------------------------------------------------------------------------------------
 
-    config.num_train_iters_per_epoch = 28000
+    config.num_train_iters_per_epoch = 28889
     config.training_hp.num_epochs = 2
 
     display_lr_schedule_original(config)
     display_lr_schedule_wsd(config)
 
-    # Loss -------------------------------------------------------------------------------------------------------------------------------------
+    # Loss ------------------------------------------------------------------------------------------------------------
 
     config.training_hp.loss.label_smoothing = 0.2
 
     display_label_smoothing(config)
+
+    # Experiments results graphs --------------------------------------------------------------------------------------
+
+    results_csv = os.getcwd() + "/data/eval/tfs_mt_small_251104-1748.csv"
+
+    display_training_loss(config, results_csv)
+    display_performance_metrics(results_csv)

@@ -20,7 +20,7 @@ This project implements the Transformer architecture from scratch considering Ma
 
 ## Getting Started
 
-### From pip
+### From PyPI
 
 ```bash
 pip install tfs-mt
@@ -91,6 +91,13 @@ The project supports various model configurations to suit different computationa
 ## Documentation
 
 Full documentation is available at [https://giovo17.github.io/tfs-mt/](https://giovo17.github.io/tfs-mt/).
+
+## License
+
+- **Source code**: licensed under the **MIT License**.
+  - Note: This project includes modified code derived from PyTorch Ignite, which is licensed under the **BSD 3-Clause License**. See the `LICENSE` file for the full text of both licenses and original copyright notices.
+
+- **Documentation**: located in the `docs/` directory, licensed under **Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)**. See `docs/LICENSE`.
 
 ## Citation
 

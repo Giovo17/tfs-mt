@@ -5,11 +5,24 @@ site_description: Transformer from scratch for Machine Translation
 site_author: Giovanni Spadaro
 edit_uri: edit/main/docs/
 repo_name: Giovo17/tfs-mt
-copyright: Maintained by <a href="https://giovannispadaro.it">Giovanni Spadaro</a>.
+copyright: |
+  Copyright &copy; <a href="https://giovannispadaro.it">Giovanni Spadaro</a><br>
+  Licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.
 
 nav:
   - Home: index.md
-  - Architecture: architecture_explain.md
+  - Architecture:
+      - Introduction: architecture_explain/introduction.md
+      - The Attention mechanism: architecture_explain/attention.md
+      - Embeddings: architecture_explain/embeddings.md
+      - Encoder/Decoder: architecture_explain/encoder_decoder.md
+      - Enhancements and sizing: architecture_explain/enhancements_and_sizing.md
+      - Conclusions: architecture_explain/conclusions.md
+  - Training/Inference:
+      - Introduction: training_inference/introduction.md
+      - Training: training_inference/training.md
+      - Inference: training_inference/inference.md
+      - Conclusions: training_inference/conclusions.md
   - Modules:
       - Architecture: modules/architecture.md
       - Embeddings: modules/embeddings.md
@@ -25,7 +38,7 @@ theme:
     - content.code.annotate
     - content.code.copy
     # - content.code.select
-    # - content.footnote.tooltips
+    - content.footnote.tooltips
     # - content.tabs.link
     - content.tooltips
     # - header.autohide
@@ -77,6 +90,7 @@ extra:
       link: https://github.com/Giovo17/tfs-mt
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/tfs-mt
+  generator: false
 
 plugins:
   - search
@@ -105,6 +119,8 @@ markdown_extensions:
   - attr_list
   - md_in_html
   - pymdownx.blocks.caption
+  - pymdownx.snippets:
+      base_path: docs
 
 extra_javascript:
   - javascripts/katex.js
@@ -113,3 +129,4 @@ extra_javascript:
 
 extra_css:
   - https://unpkg.com/katex@0/dist/katex.min.css
+  - stylesheets/extra.css
