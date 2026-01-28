@@ -21,7 +21,7 @@ The first proposed workflow of a Transformer-based model follows the **encoderâ€
 
 ![Architecture schema](../assets/img/architecture_schema.png){ loading=lazy }
 /// figure-caption
-Overall architecture scheme.
+Overall architecture schema.
 ///
 
 
