@@ -1,13 +1,19 @@
 # Ignite common utils
 #
+# This file is derived from PyTorch Ignite (BSD 3-Clause License)
+# Copyright (c) 2018-present, PyTorch-Ignite team
+# License for original code: BSD 3-Clause
+#
+# Modifications:
 # Author: Giovanni Spadaro - https://giovannispadaro.it
 # Project: https://github.com/Giovo17/tfs-mt
 # Documentation: https://giovo17.github.io/tfs-mt
 #
 # Copyright (c) Giovanni Spadaro.
-# All rights reserved.
+# License for modifications: MIT
 #
-# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
+# The full text of both licenses can be found in the LICENSE file in the root directory of this source tree.
+
 
 from typing import Any
 

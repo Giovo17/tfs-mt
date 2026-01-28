@@ -38,7 +38,7 @@ This project implements the Transformer architecture from scratch considering Ma
 
 ## Getting started
 
-### From pip
+### From PyPI
 
 ```bash
 pip install tfs-mt
@@ -105,6 +105,14 @@ The project supports various model configurations to suit different computationa
 | **Norm Type**      | PostNorm | PostNorm | PostNorm | PostNorm |
 | **Dropout**        | 0.1      | 0.1      | 0.1      | 0.1      |
 | **GloVe Dim**      | 50d      | 100d     | 300d     | -        |
+
+
+## License
+
+- **Source code**: licensed under the **MIT License**.
+  - Note: This project includes modified code derived from PyTorch Ignite, which is licensed under the **BSD 3-Clause License**. See the `LICENSE` file for the full text of both licenses and original copyright notices.
+
+- **Documentation**: located in the `docs/` directory, licensed under **Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)**. See `docs/LICENSE`.
 
 ## Citation
 
