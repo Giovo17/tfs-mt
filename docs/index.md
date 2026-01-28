@@ -7,8 +7,12 @@ Transformer from scratch for Machine Translation</h1>
     <img src="https://img.shields.io/github/v/release/Giovo17/tfs-mt"/></a>
 <a href="https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain" alt="Build status">
 <img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main"/></a>
-<a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
-    <img src="https://img.shields.io/github/license/Giovo17/tfs-mt"/></a>
+<!--a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
+    <img src="https://img.shields.io/github/license/Giovo17/tfs-mt"/></a!-- -->
+<a href="https://creativecommons.org/licenses/by-sa/4.0/" alt="License">
+    <img src="https://img.shields.io/badge/license-CC_BY_SA_4.0-green.svg"/></a>
+<a></a>
+
 <a href="https://pypi.org/project/tfs-mt/" alt="PyPi monthly downloads">
     <img src="https://img.shields.io/pypi/dm/tfs-mt"/></a>
 
@@ -121,7 +125,7 @@ If you use `tfs-mt` in your research or project, please cite:
 ```bibtex
 @software{Spadaro_tfs-mt,
 author = {Spadaro, Giovanni},
-license = {MIT},
+licenses = {MIT, CC BY-SA 4.0},
 title = {{tfs-mt}},
 url = {https://github.com/Giovo17/tfs-mt}
 }

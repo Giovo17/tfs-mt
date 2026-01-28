@@ -6,7 +6,8 @@ Transformer from scratch for Machine Translation</h1>
 
 [![Release](https://img.shields.io/github/v/release/Giovo17/tfs-mt)](https://github.com/Giovo17/tfs-mt/releases)
 [![Build status](https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main)](https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain)
-[![License: MIT](https://img.shields.io/github/license/Giovo17/tfs-mt)](https://github.com/Giovo17/tfs-mt/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/Giovo17/tfs-mt/blob/main/LICENSE)
+[![License: CC BY-SA 4.0](https://img.shields.io/badge/license-CC_BY_SA_4.0-green.svg)](https://creativecommons.org/licenses/by-sa/4.0/)
 [![pypi monthly downloads](https://img.shields.io/pypi/dm/tfs-mt)](https://pypi.org/project/tfs-mt/)
 
 
@@ -106,7 +107,7 @@ If you use `tfs-mt` in your research or project, please cite:
 ```bibtex
 @software{Spadaro_tfs-mt,
 author = {Spadaro, Giovanni},
-license = {MIT},
+licenses = {MIT, CC BY-SA 4.0},
 title = {{tfs-mt}},
 url = {https://github.com/Giovo17/tfs-mt}
 }
