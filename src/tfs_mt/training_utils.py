@@ -632,6 +632,7 @@ def setup_trainer(
 
     # Gradient scaler for mixed precision training. Not required for bfloat16 training, cause it has the same range of float32.
     # It helps prevent gradients with small magnitudes from underflowing when training with mixed precision.
+    # Reference: https://docs.pytorch.org/docs/stable/amp.html#gradient-scaling
     scaler = GradScaler(device, enabled=config.training_hp.use_amp)
 
     amp_dtype_dict = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
@@ -690,7 +691,11 @@ def setup_trainer(
             else:
                 raise ValueError("Loss type not supported")
 
+        # Compute gradients with mixed precision weights
         scaler.scale(loss).backward()
+
+        # Unscaling here to prevent aggressive gradient clipping
+        scaler.unscale_(optimizer)
 
         # Gradient clipping to stabilize training avoiding exploding gradients
         grad_norm_before_clipping = compute_grad_norm(model.parameters())
