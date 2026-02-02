@@ -253,9 +253,9 @@ def display_positional_encoding():
     pe = pe_lut.numpy().transpose()
 
     plt.figure(figsize=(10, 6))
-    sns.heatmap(pe, cmap="RdBu", center=0, annot=False, yticklabels=False, xticklabels=False)
-    plt.xlabel("Embedding Dimension")
-    plt.ylabel("Sequence Position")
+    sns.heatmap(pe, cmap="RdBu", center=0, annot=False, yticklabels=True, xticklabels=100)
+    plt.xlabel("Sequence position")
+    plt.ylabel("Embedding dimension")
     plt.tight_layout()
     plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/positional_encoding.png"))
     plt.show()
@@ -374,7 +374,7 @@ def display_lr_schedule_wsd(config):
     plt.xlabel("Step")
     plt.ylabel("Learning rate")
     plt.tight_layout()
-    plt.savefig(os.getcwd() + f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png")
+    plt.savefig(os.path.join(os.getcwd(), f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"))
     plt.show()
 
 
@@ -426,7 +426,7 @@ def display_lr_schedule_original(config):
     plt.ylabel("Learning rate")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.getcwd() + f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png")
+    plt.savefig(os.path.join(os.getcwd(), f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"))
     plt.show()
 
 
@@ -463,7 +463,7 @@ def display_label_smoothing(config):
     plt.xlabel(None)
     plt.ylabel(None)
     plt.tight_layout()
-    plt.savefig(os.getcwd() + "/docs/assets/img/label_smoothing.png")
+    plt.savefig(os.path.join(os.getcwd(), "/docs/assets/img/label_smoothing.png"))
     plt.show()
 
 
@@ -493,7 +493,7 @@ def display_training_loss(config, csv_path):
     plt.legend(loc="upper right")
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.getcwd() + "/docs/assets/img/training_loss.png")
+    plt.savefig(os.path.join(os.getcwd(), "/docs/assets/img/training_loss.png"))
     plt.show()
 
 
@@ -529,7 +529,7 @@ def display_performance_metrics(csv_path):
     plt.legend()
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.getcwd() + "/docs/assets/img/performance_metrics.png")
+    plt.savefig(os.path.join(os.getcwd(), "/docs/assets/img/performance_metrics.png"))
     plt.show()
 
 
@@ -574,7 +574,7 @@ if __name__ == "__main__":
 
     # Experiments results graphs --------------------------------------------------------------------------------------
 
-    results_csv = os.getcwd() + "/data/eval/tfs_mt_small_251104-1748.csv"
+    results_csv = os.path.join(os.getcwd(), "/data/eval/tfs_mt_small_251104-1748.csv")
 
     display_training_loss(config, results_csv)
     display_performance_metrics(results_csv)

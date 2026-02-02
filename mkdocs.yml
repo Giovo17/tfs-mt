@@ -14,7 +14,7 @@ nav:
   - Architecture:
       - Introduction: architecture_explain/introduction.md
       - The Attention mechanism: architecture_explain/attention.md
-      - Embeddings: architecture_explain/embeddings.md
+      - Tokenization and Embeddings: architecture_explain/tokenization_embeddings.md
       - Encoder/Decoder: architecture_explain/encoder_decoder.md
       - Enhancements and sizing: architecture_explain/enhancements_and_sizing.md
       - Conclusions: architecture_explain/conclusions.md

@@ -7,8 +7,12 @@ Transformer from scratch for Machine Translation</h1>
     <img src="https://img.shields.io/github/v/release/Giovo17/tfs-mt"/></a>
 <a href="https://github.com/Giovo17/tfs-mt/actions/workflows/main.yml?query=branch%3Amain" alt="Build status">
 <img src="https://img.shields.io/github/actions/workflow/status/Giovo17/tfs-mt/main.yml?branch=main"/></a>
-<a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
-    <img src="https://img.shields.io/github/license/Giovo17/tfs-mt"/></a>
+<!--a href="https://github.com/Giovo17/tfs-mt/blob/main/LICENSE" alt="License">
+    <img src="https://img.shields.io/github/license/Giovo17/tfs-mt"/></a!-- -->
+<a href="https://creativecommons.org/licenses/by-sa/4.0/" alt="License">
+    <img src="https://img.shields.io/badge/license-CC_BY_SA_4.0-green.svg"/></a>
+<a></a>
+
 <a href="https://pypi.org/project/tfs-mt/" alt="PyPi monthly downloads">
     <img src="https://img.shields.io/pypi/dm/tfs-mt"/></a>
 
@@ -87,25 +91,6 @@ The whole project parameters can be configured in `src/tfs_mt/configs/config.yml
 - **Training**: Optimizer, Learning rate scheduler, number of epochs, ...
 - **Data**: Dataset, Dataloader, Tokenizer, ...
 
-## Architecture
-
-For a detailed explanation of the architecture and design choices, please refer to the [Architecture Documentation](https://giovo17.github.io/tfs-mt/architecture_explain/).
-
-### Model sizes
-
-The project supports various model configurations to suit different computational resources:
-
-| Parameter                | Nano     | Small    | Base     | Original |
-| :----------------------- | :------- | :------- | :------- | :------- |
-| **Encoder Layers** | 4        | 6        | 8        | 6        |
-| **Decoder Layers** | 4        | 6        | 8        | 6        |
-| **d_model**        | 50       | 100      | 300      | 512      |
-| **Num Heads**      | 4        | 6        | 8        | 8        |
-| **d_ff**           | 200      | 400      | 800      | 2048     |
-| **Norm Type**      | PostNorm | PostNorm | PostNorm | PostNorm |
-| **Dropout**        | 0.1      | 0.1      | 0.1      | 0.1      |
-| **GloVe Dim**      | 50d      | 100d     | 300d     | -        |
-
 
 ## License
 
@@ -121,7 +106,7 @@ If you use `tfs-mt` in your research or project, please cite:
 ```bibtex
 @software{Spadaro_tfs-mt,
 author = {Spadaro, Giovanni},
-license = {MIT},
+licenses = {MIT, CC BY-SA 4.0},
 title = {{tfs-mt}},
 url = {https://github.com/Giovo17/tfs-mt}
 }
