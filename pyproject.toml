@@ -1,19 +1,16 @@
 [project]
 name = "tfs-mt"
-version = "0.1"
+version = "0.1.4"
 description = "Transformer from scratch for Machine Translation"
 authors = [{ name = "Giovanni Spadaro", email = "giovannispada17.gs@gmail.com" }]
 readme = "README.md"
 keywords = ['nlp', 'deep-learning', 'transformer', 'pytorch', 'machine-translation', 'nmt']
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.13.11,<3.14"
 classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
