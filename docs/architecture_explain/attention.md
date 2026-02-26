@@ -8,9 +8,9 @@ Consider the translation of the English sentence _"The transformer architecture 
 This mechanism is implemented through a retrieval system structured around **queries**, **keys**, and **values**. In this framework, the model processes each word by generating a **query** $q$, which represents the specific information it currently needs to resolve, such as the grammatical dependencies or semantic attributes of the word. It is also referred to as the **focus of attention**. Simultaneously, every word in the input sequence provides a **key** $k$ that serves as a descriptive index or metadata, identifying the type of information it contains. By computing the compatibility between the query of the target word and the keys of all other words, the system determines a relevance weight for each word in the sequence, called **attention weights**. These weights are then applied to the **values** $v$, which hold the actual latent representations of the words. The final output is a weighted sum of these values, effectively filtering the sequence to extract only the most relevant informational content for the current processing step.
 
 
-## Scaled Dot-Product Attention
+## Scaled Dot Product Attention
 
-The **scaled dot-product attention** is the variant employed in _Attention Is All You Need_[^1].
+The **scaled dot product attention** is the variant employed in _Attention Is All You Need_[^1].
 
 For a specific input vector $x_i \in \mathbb{R}^{d_{model}}$, three unique representations are generated: a **query** $q_i \in \mathbb{R}^{d_{k}}$, a **key** $k_i \in \mathbb{R}^{d_{k}}$, and a **value** $v_i \in \mathbb{R}^{d_{v}}$. These are obtained by projecting $x_i$ using learned weight matrices:
 
@@ -32,9 +32,9 @@ $$
 
 This operation is fundamental for three main reasons:
 
-1. **Normalization**: It transforms raw similarity scores into a probability distribution that sums to 1. This ensures that the attention output is a stable weighted average of the values, preventing the output magnitudes from exploding.
-2. **Focus**: The exponential nature of the softmax function sharpens the distribution, effectively focusing on the most relevant elements while suppressing less important ones.
-3. **Differentiability**: It is differentiable, allowing the model to learn through gradient descent.
+1. **Normalization**. It transforms raw similarity scores into a probability distribution that sums to 1. This ensures that the attention output is a stable weighted average of the values, preventing the output magnitudes from exploding.
+2. **Focus**. The exponential nature of the softmax function sharpens the distribution, effectively focusing on the most relevant elements while suppressing less important ones.
+3. **Differentiability**. Since the operation is differentiable, it doesn't break the chain rule and backpropagation can still be used to update model weights.
 
 These weights represent the relative importance of each value $v_j$ for the current query $q_i$. The attention output $z_i$ is then computed as the weighted sum of all values:
 
@@ -54,7 +54,7 @@ $$
 The attention process to calculate the attention output of the input sequence's third element[^2]. Note that here $d_{model}$ is referred to as $d$.
 ///
 
-In practice, computing attention for each vector individually cannot be done in parallel. To take advantage of parallelization, all input vectors in a sequence are grouped into a matrix $X \in \mathbb{R}^{S,d_{model}}$. The projections are then performed simultaneously for the entire sequence:
+In practice, computing attention between each pair of vectors individually cannot be done in parallel. To take advantage of parallelization, all input vectors in a sequence, composed of $S$ tokens, are grouped into a matrix $X \in \mathbb{R}^{S,d_{model}}$. The projections are then performed simultaneously for the entire sequence:
 
 $$
 Q = X W^Q  \quad\quad K = X W^K  \quad\quad  V = X W^V
@@ -64,10 +64,10 @@ with $Q \in \mathbb{R}^{S,d_k}$, $K \in \mathbb{R}^{S,d_k}$ and $V \in \mathbb{R
 
 By representing the queries, keys, and values as matrices ($Q, K, V$), the attention for the entire sequence can be computed using a single set of matrix operations. This **matricial implementation** allow to parallelize the scoring and weighting process across all positions at once.
 
-The formulation for the scaled dot-product attention in matricial form is:
+The formulation for the scaled dot product attention in matricial form is:
 
 $$
-Attention(Q, K, V) = softmax\left(\frac{QK^T}{\sqrt{d_{k}}}\right)V
+Attention(Q, K, V) = softmax\left(\frac{QK^\top}{\sqrt{d_{k}}}\right)V
 $$
 
 After computing the scores and applying the scaling factor, the **softmax** function is applied row-wise. These weights are then used to compute a weighted sum of the values $V$. Finally, similar to the single-vector case, the output is projected using $W^O$.
@@ -75,7 +75,7 @@ After computing the scores and applying the scaling factor, the **softmax** func
 
 ## Multi-Head Attention
 
-What presented in the previous section can be referred to as single-head attention. Although it is a powerful operation, the Transformer architecture employs the **multi-head attention**. The intuition is that different aspects of the relationship between words might be important in different contexts. One attention head might focus on syntactic relationships (like subject-verb agreement), while another focuses on semantic coreference.
+What presented in the previous section can be referred to as single-head attention. Although it is a powerful operation, the Transformer architecture employs the **multi-head attention**. The intuition is that different aspects of the relationship between words might be important in different contexts. One attention head might focus on syntactic relationships, like subject-verb agreement, while another focuses on semantic coreference.
 
 Rather than computing attention once globally, the $Q, K$, and $V$ matrices are projected into $A$ different lower-dimensional spaces (each of dimension $d_{head}$) and $A$ parallel attention operations are computed.
 
@@ -83,10 +83,10 @@ $$
 \text{MultiHeadAttention}(Q, K, V) = \text{Concat}(head_1, head_2, ..., head_A) W^O
 $$
 
-where each head is: $\quad head_i = Attention(QW_i^Q, KW_i^K, VW_i^V)$
+where $\quad head_i = Attention(XW_i^Q, XW_i^K, XW_i^V)$
 
 
-An important detail in this project is the handling of the model dimension $d_{model}$. Standard Transformers often require $d_{model}$ to be divisible by the number of heads. However, to support pretrained embeddings like GloVe (which come in fixed sizes: 50, 100, 200 and 300), the code relaxes this constraint. It projects the input $X$ to spaces of dimensions $d_{model} \times A * d_{head}$[^3] and uses an output projection matrix $W^O \in \mathbb{R}^{A * d_{head}, d_{model}}$ to map the concatenated results back to the original $d_{model}$, ensuring mathematical consistency regardless of the input size.
+An important detail in this project is the handling of the model dimension $d_{model}$. Standard Transformers often require $d_{model}$ to be divisible by the number of heads. However the code relaxes this constraint in order to support pretrained embeddings like GloVe, which come in fixed sizes: 50, 100, 200 and 300. It projects the input $X$ to spaces of dimensions $d_{model} \times A * d_{head}$[^3] and uses an output projection matrix $W^O \in \mathbb{R}^{A * d_{head}, d_{model}}$ to map the concatenated results back to the original $d_{model}$, ensuring mathematical consistency regardless of the input size.
 
 ## Attention Types and Masking Strategies
 
@@ -96,13 +96,13 @@ Proper masking is critical for Transformer functionality. Masks are implemented 
 
 
 
-### Encoder Self-Attention
+### Encoder Self Attention
 
 In the encoder, tokens should attend to all other non-padding tokens in the sequence.
 
 ![Encoder attention weights](../assets/img/attention_matrix.png){ loading=lazy }
 /// figure-caption
-Encoder attention weights illustrating how all non-padding tokens can interact.
+Bidirectional encoder attention matrix.
 ///
 
 A position $(i, j)$ in the **padding mask** is "True" only if both tokens $i$ and $j$ are not padding. This ensures that the model never looks at padding tokens nor allows padding tokens to influence others.
@@ -115,18 +115,18 @@ The decoder uses a special masking strategy to maintain the auto-regressive prop
 
 ![Causal attention weights](../assets/img/causal_attention_matrix.png){ loading=lazy }
 /// figure-caption
-Causal attention weights showing the lower-triangular structure.
+Causal decoder attention matrix.
 ///
 
 This is achieved by applying a **causal mask**, which is a lower-triangular matrix. In this implementation, this is combined with the padding mask using a logical AND operation. This mask ensures a token at position $i$ can only attend to positions $j \le i$ that are also not padding.
 
-### Decoder Cross-Attention
+### Decoder Cross Attention
 
-In cross-attention, the **queries** come from the target sequence (the decoder), while the **keys** and **values** come from the source sequence representation (the encoder output).
+In cross attention, the **queries** come from the target sequence (the decoder), while the **keys** and **values** come from the source sequence representation (the encoder output).
 
 ![Cross attention weights](../assets/img/cross_attention_matrix.png){ loading=lazy }
 /// figure-caption
-Cross attention weights showing target-to-source relevance.
+Cross attention matrix.
 ///
 
 The masking strategy here ensures that target tokens do not attend to source padding tokens. Note that the number of rows in the attention matrix is determined by the query (target sequence length), while the number of columns is determined by the key (source sequence length). This allows the decoder to pick relevant information from the encoded source sentence at each step of the translation.

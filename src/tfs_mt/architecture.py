@@ -199,6 +199,9 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x: Float[torch.Tensor, "B S D"]) -> Float[torch.Tensor, "B S D"]:
+        # Pointwise feedforward. It applies the transformation independently and identically to each position along the sequence dimension S and batch size B.
+        # This works because nn.Linear operates only on the last dimension D and broadcasts over all leading dimensions,
+        # so the same weights are applied to each of the B*S vectors of size D (d_model).
         return self.mlp(x)
 
 
