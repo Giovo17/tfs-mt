@@ -348,7 +348,7 @@ def setup_handlers(
 ) -> None:
     """Setup Ignite handlers."""
 
-    if enable_ckpt == 0:  # Setup checkpointing
+    if enable_ckpt:  # Setup checkpointing
         # Setup checkpoints savers
         disk_saver = DiskSaver(os.path.join(config.output_dir, "checkpoints"), require_empty=False)
         s3_saver = (

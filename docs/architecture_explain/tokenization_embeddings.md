@@ -62,21 +62,20 @@ Positional encoding matrix. Each row represents a position, and each column repr
 
 Figure 2 provides an alternative way to visualize the positional encoding signals. In both graphs, the y-axis represents the individual dimensions of the positional vector. The square wave signals (right) are included specifically as a conceptual aid to help visualize how the different dimensions encode positional information with varying granularity: for example, the 8th dimension (bottom signal) indicates whether a token resides in the first or second half of the sequence, while the 7th dimension bisects these halves into quarters. The black vertical segments at position 407 illustrate how the intersection of these various frequencies uniquely identifies that specific location in the sequence.
 
-These positional vectors are pre-computed and remain fixed throughout the training process, rather than being learned as model parameters. A key property of this sinusoidal encoding is its ability to represent **relative positions** through simple transformations[^3]. Because sine and cosine functions are periodic and systematically shifted across dimensions, the vector for any position plus a fixed offset (e.g., $pos + k$) can be derived from the vector at $pos$ using a fixed linear transformation.
-
-So the geometric relationship between two positional vectors depends only on the distance between them, not their absolute location in the sequence. This allows the attention mechanism to capture the structural dependencies of language identically, whether they appear at the beginning or the end of a sentence.
-
-
 ![Sinusoidal signals](../assets/img/pe_signals.png){ loading=lazy }
 /// figure-caption
 Left: Sinusoidal signals across different dimensions. Right: Comparison with square wave (binary) signals. In these graphs the embedding dimension is 8 and the sequence length is 1024.
 ///
 
 
+These positional vectors are pre-computed and remain fixed throughout the training process, rather than being learned as model parameters. A key property of this sinusoidal encoding is its ability to represent **relative positions** through simple transformations[^3]. Because sine and cosine functions are periodic and systematically shifted across dimensions, the vector for any position plus a fixed offset (e.g., $pos + k$) can be derived from the vector at $pos$ using a fixed linear transformation.
+
+So the geometric relationship between two positional vectors depends only on the distance between them, not their absolute location in the sequence. This allows the attention mechanism to capture the structural dependencies of language identically, whether they appear at the beginning or the end of a sentence.
+
 
 
 [^1]: Pennington, J., Socher, R. \& Manning, C. GloVe: Global Vectors for Word Representation. {\em Empirical Methods In Natural Language Processing (EMNLP)}. pp. 1532-1543 (2014), <http://www.aclweb.org/anthology/D14-1162>
 
-[^2]: More on the [Training](../training_inference/training.md) section.
+[^2]: More on the [Training](../training_inference/training.md) documentation.
 
 [^3]: <https://blog.timodenk.com/linear-relationships-in-the-transformers-positional-encoding/>
