@@ -93,7 +93,11 @@ extra:
   generator: false
 
 plugins:
-  - search
+  - search:
+      pipeline:
+        - stemmer
+        - stopWordFilter
+        - trimmer
   - mkdocstrings:
       handlers:
         python:
