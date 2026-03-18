@@ -63,7 +63,7 @@ model_configs:
     norm_type: "postnorm"
 
 training_hp:
-  num_epochs: 5
+  num_epochs: 2
   use_amp: True
   amp_dtype: "bfloat16"
   torch_compile_mode: "max-autotune"  # Set to null to use default

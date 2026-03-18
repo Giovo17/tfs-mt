@@ -21,6 +21,7 @@ nav:
   - Training/Inference:
       - Introduction: training_inference/introduction.md
       - Training: training_inference/training.md
+      - Evaluation: training_inference/evaluation.md
       - Inference: training_inference/inference.md
       - Conclusions: training_inference/conclusions.md
   - Modules:
@@ -93,7 +94,11 @@ extra:
   generator: false
 
 plugins:
-  - search
+  - search:
+      pipeline:
+        - stemmer
+        - stopWordFilter
+        - trimmer
   - mkdocstrings:
       handlers:
         python:

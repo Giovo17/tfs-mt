@@ -17,6 +17,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
@@ -374,7 +375,7 @@ def display_lr_schedule_wsd(config):
     plt.xlabel("Step")
     plt.ylabel("Learning rate")
     plt.tight_layout()
-    plt.savefig(os.path.join(os.getcwd(), f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"))
+    plt.savefig(os.path.join(os.getcwd(), f"docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"))
     plt.show()
 
 
@@ -426,23 +427,30 @@ def display_lr_schedule_original(config):
     plt.ylabel("Learning rate")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(os.getcwd(), f"/docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"))
+    plt.savefig(os.path.join(os.getcwd(), f"docs/assets/img/lr_scheduling_{config.training_hp.lr_scheduler.type}.png"))
     plt.show()
 
 
-def display_label_smoothing(config):
-    criterion = KLDivLabelSmoothingLoss(vocab_size=5, padding_idx=1, smoothing=config.training_hp.loss.label_smoothing)
+def display_label_smoothing(
+    config, label_smoothing: float = 0.4, train_examples: int = 5, vocab_size: int = 8, pad_idx: int = 1
+):
+    criterion = KLDivLabelSmoothingLoss(vocab_size=vocab_size, padding_idx=pad_idx, smoothing=label_smoothing)
 
-    outputs = torch.FloatTensor([
-        [0, 0.2, 0.7, 0.1, 0],
-        [0, 0.2, 0.7, 0.1, 0],
-        [0, 0.2, 0.7, 0.1, 0],
-        [0, 0.2, 0.7, 0.1, 0],
-        [0, 0.2, 0.7, 0.1, 0],
-    ])
+    outputs = F.softmax(torch.rand(train_examples, vocab_size), dim=1)
 
     pred = outputs.log_softmax(-1)
-    target = torch.LongTensor([2, 1, 0, 3, 3])
+
+    # Make random target tensor
+    non_pad_tokens = list(range(vocab_size))
+    non_pad_tokens.remove(pad_idx)
+    values = torch.tensor(non_pad_tokens)
+
+    # Sample indices without replacement
+    indices = torch.multinomial(torch.ones(len(values)), num_samples=train_examples - 1, replacement=False)
+    target = values[indices]
+
+    # Manually insert a pad token at -2 position to show the effect of padding
+    target = torch.cat([target[:-1], torch.tensor([pad_idx]), target[-1:]])
 
     _, true_dist = criterion(pred, target, return_true_dist=True)
 
@@ -452,18 +460,18 @@ def display_label_smoothing(config):
             "columns": y,
             "rows": x,
         })
-        for y in range(5)
-        for x in range(5)
+        for y in range(vocab_size)
+        for x in range(train_examples)
     ])
 
     heatmap_data = LS_data.pivot(index="rows", columns="columns", values="target distribution")
 
-    plt.figure(figsize=(6, 6))
-    sns.heatmap(heatmap_data, cmap="viridis", cbar_kws={"label": "target distribution"}, square=True)
+    plt.figure(figsize=(8, 5))
+    sns.heatmap(heatmap_data, cmap="viridis", cbar_kws={"label": "target distribution"}, square=True, vmin=0, vmax=1)
     plt.xlabel(None)
     plt.ylabel(None)
     plt.tight_layout()
-    plt.savefig(os.path.join(os.getcwd(), "/docs/assets/img/label_smoothing.png"))
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/label_smoothing.png"))
     plt.show()
 
 
@@ -493,7 +501,7 @@ def display_training_loss(config, csv_path):
     plt.legend(loc="upper right")
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(os.getcwd(), "/docs/assets/img/training_loss.png"))
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/training_loss.png"))
     plt.show()
 
 
@@ -529,7 +537,7 @@ def display_performance_metrics(csv_path):
     plt.legend()
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(os.getcwd(), "/docs/assets/img/performance_metrics.png"))
+    plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/performance_metrics.png"))
     plt.show()
 
 
@@ -538,6 +546,8 @@ if __name__ == "__main__":
     config = OmegaConf.load(config_path)
 
     sns.set_context("talk", font_scale=0.95, rc={"font.size": 14})
+
+    torch.manual_seed(42)
 
     os.makedirs(os.path.join(os.getcwd(), "docs/assets/img"), exist_ok=True)
 
@@ -567,8 +577,6 @@ if __name__ == "__main__":
     display_lr_schedule_wsd(config)
 
     # Loss ------------------------------------------------------------------------------------------------------------
-
-    config.training_hp.loss.label_smoothing = 0.2
 
     display_label_smoothing(config)
 

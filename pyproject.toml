@@ -27,7 +27,7 @@ dependencies = [
     "transformers>=4.57.1",
     "types-pyyaml>=6.0.12.20250822",
     "types-requests>=2.32.4.20250809",
-    "zensical>=0.0.23",
+    "zensical>=0.0.24",
     "mkdocstrings[python]>=1.0.3",
 ]
 
@@ -39,9 +39,9 @@ Documentation = "https://giovo17.github.io/tfs-mt/"
 [dependency-groups]
 dev = [
     "pytest>=8.4.1",
-    "prek>=0.2.9",
-    "ty>=0.0.1a27",
-    "ruff>=0.12.7",
+    "prek>=0.3.4",
+    "ty>=0.0.19",
+    "ruff>=0.15.4",
     "skops>=0.13.0",
     "torchinfo>=1.8.0",
     "seaborn>=0.13.2",
@@ -57,6 +57,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = ["/docs"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tfs_mt"]

@@ -16,7 +16,7 @@ Left: Training flow. Right: Inference flow. Green blocks represent trainable mod
 
 This document is organized to provide a detailed walkthrough of the training and inference logic:
 
--   **The Training Logic**: Details the learning objectives, optimization strategies including various learning rate schedulers, and regularization techniques.
--   **Experimental Results**: Presents the training outcomes, evaluating the model through standard metrics.
--   **The Inference Logic**: Explains the autoregressive generation process and the implementation of decoding strategies used to produce translations.
--   **Conclusions**: Summarizes implementation challenges, learned lessons, and discusses modern paradigms in training and inference.
+- **The Training Logic**: Details the learning objectives, optimization strategies including various learning rate schedulers, and regularization techniques.
+- **Evaluation results**: Presents the training outcomes, evaluating the model through standard metrics.
+- **The Inference Logic**: Explains the autoregressive generation process and the implementation of decoding strategies used to produce translations.
+- **Conclusions**: Summarizes implementation challenges, learned lessons, and discusses modern paradigms in training and inference.

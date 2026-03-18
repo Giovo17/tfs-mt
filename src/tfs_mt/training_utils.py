@@ -650,7 +650,8 @@ def setup_trainer(
 
         tgt_input_sequence = tgt_sequence[:, :-1]
 
-        # Count how many tokens encoder and decoder see during training, excluding SOS and EOS tokens
+        # Count how many tokens encoder and decoder see during training, excluding PAD, SOS and EOS tokens
+        # NOTE The mask is implemented to include a token in the attention computation if the value at the corresponding index in the mask is True
         num_src_tokens = src_mask.to(torch.int8).sum().item() - 2 * src_mask.size(0)
         num_tgt_tokens = tgt_mask.to(torch.int8).sum().item() - 2 * tgt_mask.size(0)
         engine.state.tokens_seen_src = getattr(engine.state, "tokens_seen_src", 0) + num_src_tokens

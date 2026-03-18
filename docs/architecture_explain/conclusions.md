@@ -61,7 +61,7 @@ At its core, the scaled dot-product attention mechanism provides a flexible info
 
 Raw text enters the model through word level tokenization and dense embeddings, where pretrained GloVe vectors provide a rich semantic foundation. Sinusoidal positional encodings then restore sequence order by injecting position-dependent signals at multiple frequencies, preserving both fine-grained local and coarse-grained global positional information without adding learnable parameters.
 
-These representations flow through stacked encoder layers, where self-attention builds bidirectional contextual embeddings, and through decoder layers, where causal masking enforces autoregressive generation and cross-attention bridges the source and target languages. Feed-forward networks at each layer introduce the non-linear transformations necessary to learn abstract, higher-level concepts from the attention-aggregated context.
+These representations flow through stacked encoder layers, where self-attention builds bidirectional contextual embeddings, and through decoder layers, where causal masking enforces autoregressive generation and cross-attention bridges the source and target languages. Feed forward networks at each layer introduce the non-linear transformations necessary to learn abstract, higher-level concepts from the attention-aggregated context.
 
 Throughout the entire architecture, residual connections and layer normalization work together to ensure training stability: the residual stream provides a gradient highway that enables effective optimization of deep stacks, while normalization keeps activations well-conditioned across layers and training steps.
 
