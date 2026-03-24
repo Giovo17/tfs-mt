@@ -18,6 +18,7 @@ import seaborn as sns
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from matplotlib.lines import Line2D
 from omegaconf import OmegaConf
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
@@ -493,7 +494,6 @@ def display_training_loss(config, csv_path):
     for i in range(1, int(max_step // iters_per_epoch) + 1):
         plt.axvline(x=i * iters_per_epoch, color="red", linestyle="--", alpha=0.2)
 
-    plt.title("Training loss")
     plt.xlabel("Step")
     plt.ylabel("Loss")
     plt.xlim(left=0)
@@ -509,33 +509,59 @@ def display_performance_metrics(csv_path):
     df = pd.read_csv(csv_path)
 
     metrics_map = {
-        "test_eval/Bleu": "BLEU",
-        # "test_eval/Bleu_smooth_2": "BLEU_smooth_2",
+        "test_eval/Bleu": "BLEU smooth 1",
+        "test_eval/Bleu_smooth_2": "BLEU smooth 2",
         "test_eval/Rouge/Rouge-L-F": "ROUGE-L-F",
-        # "test_eval/Rouge/Rouge-L-P": "ROUGE-L-P",
-        # "test_eval/Rouge/Rouge-L-R": "ROUGE-L-R",
         "test_eval/Rouge/Rouge-2-F": "ROUGE-2-F",
-        # "test_eval/Rouge/Rouge-2-P": "ROUGE-2-P",
-        # "test_eval/Rouge/Rouge-2-R": "ROUGE-2-R",
+        "test_eval/Perplexity": "Perplexity",
     }
 
-    available_metrics = list(metrics_map)
+    perplexity_col = "test_eval/Perplexity"
+    primary_metrics = {k: v for k, v in metrics_map.items() if k != perplexity_col}
 
-    # Melt the dataframe to have a metric column that later will be used as hue
-    melted_df = df.melt(id_vars=["_step"], value_vars=available_metrics, var_name="Metric", value_name="Score")
-    melted_df = melted_df.dropna(subset=["Score"])
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    ax2 = ax1.twinx()  # Second y-axis sharing the same x-axis
 
-    melted_df["Metric"] = melted_df["Metric"].map(metrics_map)  # Map original column names to display labels
+    color_map = {
+        "BLEU smooth 1": "tab:blue",
+        "BLEU smooth 2": "tab:purple",
+        "ROUGE-L-F": "tab:orange",
+        "ROUGE-2-F": "tab:green",
+        "Perplexity": "tab:red",
+    }
 
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=melted_df, x="_step", y="Score", hue="Metric", marker="o")
+    # Plot primary metrics (BLEU, ROUGE) on ax1
+    for col, label in primary_metrics.items():
+        if col in df.columns:
+            data = df[["_step", col]].dropna(subset=[col])
+            ax1.plot(data["_step"], data[col], label=label, marker="o", color=color_map[label])
 
-    plt.title("Performance metrics")
-    plt.xlabel("Step")
-    plt.ylabel("Score")
-    plt.xlim(left=-2500)
-    plt.legend()
-    plt.grid(alpha=0.3)
+    # Plot Perplexity on ax2
+    if perplexity_col in df.columns:
+        data = df[["_step", perplexity_col]].dropna(subset=[perplexity_col])
+        ax2.plot(
+            data["_step"],
+            data[perplexity_col],
+            label="Perplexity",
+            marker="o",
+            color=color_map["Perplexity"],
+            linestyle="--",
+        )
+
+    ax1.set_xlabel("Step")
+    ax1.set_ylabel("Score (BLEU / ROUGE)")
+    ax2.set_ylabel("Score (Perplexity)", color=color_map["Perplexity"])
+    ax2.tick_params(axis="y", labelcolor=color_map["Perplexity"])
+
+    ax1.set_xlim(left=-2500)
+    ax1.grid(alpha=0.3)
+
+    custom_handles = [
+        Line2D([0], [0], color=color_map[label], marker="o", label=label)
+        for label in ["BLEU smooth 1", "BLEU smooth 2", "ROUGE-L-F", "ROUGE-2-F"]
+    ] + [Line2D([0], [0], color=color_map["Perplexity"], marker="o", linestyle="--", label="Perplexity")]
+    ax1.legend(handles=custom_handles, bbox_to_anchor=(1.15, 1), loc="upper left")
+
     plt.tight_layout()
     plt.savefig(os.path.join(os.getcwd(), "docs/assets/img/performance_metrics.png"))
     plt.show()
@@ -553,36 +579,38 @@ if __name__ == "__main__":
 
     # Attention matrix ------------------------------------------------------------------------------------------------
 
-    config.chosen_model_size = "small"
+    # config.chosen_model_size = "small"
 
-    selected_layer = -1
-    selected_attention_head = 1
+    # selected_layer = -1
+    # selected_attention_head = 1
 
-    display_attention_matrix(selected_layer, selected_attention_head)
-    display_causal_attention_matrix(selected_layer, selected_attention_head)
-    display_cross_attention_matrix(selected_layer, selected_attention_head)
+    # display_attention_matrix(selected_layer, selected_attention_head)
+    # display_causal_attention_matrix(selected_layer, selected_attention_head)
+    # display_cross_attention_matrix(selected_layer, selected_attention_head)
 
-    # Positional Encoding ---------------------------------------------------------------------------------------------
+    # # Positional Encoding ---------------------------------------------------------------------------------------------
 
-    display_positional_encoding()
-    display_sinusoidal_signals()
-    display_square_wave_signals()
+    # display_positional_encoding()
+    # display_sinusoidal_signals()
+    # display_square_wave_signals()
 
-    # LR scheduler ----------------------------------------------------------------------------------------------------
+    # # LR scheduler ----------------------------------------------------------------------------------------------------
 
-    config.num_train_iters_per_epoch = 28889
-    config.training_hp.num_epochs = 2
+    # config.num_train_iters_per_epoch = 28889
+    # config.training_hp.num_epochs = 2
 
-    display_lr_schedule_original(config)
-    display_lr_schedule_wsd(config)
+    # display_lr_schedule_original(config)
+    # display_lr_schedule_wsd(config)
 
-    # Loss ------------------------------------------------------------------------------------------------------------
+    # # Loss ------------------------------------------------------------------------------------------------------------
 
-    display_label_smoothing(config)
+    # display_label_smoothing(config)
 
     # Experiments results graphs --------------------------------------------------------------------------------------
 
-    results_csv = os.path.join(os.getcwd(), "/data/eval/tfs_mt_small_251104-1748.csv")
+    config.num_train_iters_per_epoch = 28889
+
+    results_csv = os.path.join(os.getcwd(), "data/eval/tfs_mt_small_260207-0915.csv")
 
     display_training_loss(config, results_csv)
     display_performance_metrics(results_csv)
