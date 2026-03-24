@@ -24,7 +24,7 @@ from safetensors.torch import save_file
 from tfs_mt.architecture import Transformer
 from tfs_mt.ignite_custom_utils.checkpoint import S3Saver
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class CheckpointUploadError(Exception):
@@ -237,105 +237,54 @@ def format_dataset_details(config: DictConfig) -> list[str]:
 def generate_readme(config: DictConfig, model_name: str) -> str:
     """Generate a comprehensive README for the Hugging Face repository."""
 
+    # 1. Load template
+    template_path = os.path.join(os.path.dirname(__file__), "tfs_mt/templates/model_README.md")
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f"README template not found at {template_path}")
+
+    with open(template_path) as f:
+        template = f.read()
+
+    # 2. Prepare dynamic content
     src = config.dataset.get("src_lang", "")
     tgt = config.dataset.get("tgt_lang", "")
 
-    readme_parts = [
-        "---",
-        "language:",
-        f"- {src}",
-        f"- {tgt}",
-        "license: mit",
-        "tags:",
-        "- pytorch",
-        "- nlp",
-        "- machine-translation",
-        "pipeline_tag: translation",
-    ]
-
-    # Add dataset tag if available
+    datasets_section = ""
     if "dataset_id" in config.dataset:
-        dataset_id = config.dataset.dataset_id
-        readme_parts.append("datasets:")
-        readme_parts.append(f"- {dataset_id}")
-
-    readme_parts.extend([
-        "---",
-        "",
-        f"# {model_name}",
-        "",
-    ])
-
-    # Model description
-    readme_parts.append("Transformer from scratch for Machine Translation.")
+        datasets_section = f"datasets:\n- {config.dataset.dataset_id}"
 
     inference_script_path = os.path.join(os.getcwd(), "src/inference.py")
     with open(inference_script_path) as f:
-        inference_code = f.readlines()
+        inference_code_lines = f.readlines()
 
-    inference_code = [line.rstrip("\n") for line in inference_code if not line.startswith("#")]
-    if not inference_code[0]:
-        inference_code.pop(0)
-
-    readme_parts.extend([
-        "",
-        "## Quick Start",
-        "",
-        "```bash",
-        "pip install tfs-mt",
-        "```",
-        "",
-        "```python",
-        *inference_code,
-        "```",
-        "",
-    ])
-
-    # Model Architecture
-    readme_parts.extend([
-        "## Model Architecture",
-        "",
-    ])
+    inference_code_lines = [line.rstrip("\n") for line in inference_code_lines if not line.startswith("#")]
+    if inference_code_lines and not inference_code_lines[0]:
+        inference_code_lines.pop(0)
+    inference_code = "\n".join(inference_code_lines)
 
     chosen_size = config.get("chosen_model_size", "unknown")
-    arch_lines = format_model_architecture(config, chosen_size)
-    readme_parts.extend(arch_lines)
-    readme_parts.append("")
+    model_architecture = "\n".join(format_model_architecture(config, chosen_size))
+    tokenizer_details = "\n".join(format_tokenizer_details(config))
+    dataset_details = "\n".join(format_dataset_details(config))
+    full_config = OmegaConf.to_yaml(config, resolve=True).strip()
 
-    # Tokenizer Configuration
-    readme_parts.extend([
-        "### Tokenizer",
-        "",
-    ])
+    # 3. Fill template
+    replacements = {
+        "{{src_lang}}": src,
+        "{{tgt_lang}}": tgt,
+        "{{datasets_section}}": datasets_section,
+        "{{inference_code}}": inference_code,
+        "{{model_architecture}}": model_architecture,
+        "{{tokenizer_details}}": tokenizer_details,
+        "{{dataset_details}}": dataset_details,
+        "{{full_config}}": full_config,
+    }
 
-    tok_lines = format_tokenizer_details(config)
-    readme_parts.extend(tok_lines)
-    readme_parts.append("")
+    readme = template
+    for placeholder, value in replacements.items():
+        readme = readme.replace(placeholder, str(value))
 
-    # Dataset Information
-    readme_parts.extend([
-        "## Dataset",
-        "",
-    ])
-
-    ds_lines = format_dataset_details(config)
-    readme_parts.extend(ds_lines)
-    readme_parts.append("")
-
-    readme_parts.extend([
-        "## Full training configuration",
-        "",
-        "<details>",
-        "<summary>Click to expand complete config-lock.yaml</summary>",
-        "",
-        "```yaml",
-        OmegaConf.to_yaml(config, resolve=True).strip(),
-        "```",
-        "",
-        "</details>",
-    ])
-
-    return "\n".join(readme_parts)
+    return readme
 
 
 def upload_to_huggingface(

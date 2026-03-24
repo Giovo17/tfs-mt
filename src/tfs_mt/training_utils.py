@@ -633,7 +633,10 @@ def setup_trainer(
     # Gradient scaler for mixed precision training. Not required for bfloat16 training, cause it has the same range of float32.
     # It helps prevent gradients with small magnitudes from underflowing when training with mixed precision.
     # Reference: https://docs.pytorch.org/docs/stable/amp.html#gradient-scaling
-    scaler = GradScaler(device, enabled=config.training_hp.use_amp)
+    scaler = GradScaler(
+        device,
+        enabled=config.training_hp.use_amp and config.training_hp.amp_dtype not in ["float32", "bfloat16"],
+    )
 
     amp_dtype_dict = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
 
