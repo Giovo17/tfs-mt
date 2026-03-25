@@ -74,7 +74,7 @@ The whole project parameters can be configured in `src/tfs_mt/configs/config.yml
 
 The technical breakdown of the architecture and the training/inference workflows can be found here:
 
-- [Architecture](https://giovo17.github.io/tfs-mt/architecture_explain/)
+- [Architecture](https://giovo17.github.io/tfs-mt/architecture_explain/introduction/)
 
 - [Training and Inference](https://giovo17.github.io/tfs-mt/training_inference/introduction/)
 
