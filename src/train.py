@@ -26,12 +26,13 @@ from omegaconf import OmegaConf
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.profiler import ProfilerActivity, profile, record_function
+from torch.profiler import ProfilerActivity
 from torchinfo import summary
 
 from tfs_mt.architecture import build_model
 from tfs_mt.data_utils import build_data_utils
 from tfs_mt.decoding_utils import greedy_decoding
+from tfs_mt.ignite_custom_utils.metrics import Perplexity
 from tfs_mt.training_utils import (
     KLDivLabelSmoothingLoss,
     get_device,
@@ -226,6 +227,12 @@ def run(config, enable_log_ckpt=True):
             multiref="best",
             output_transform=partial(nlp_metric_transform, tgt_tokenizer=tgt_tokenizer),
         ),
+        "Perplexity": Perplexity(
+            criterion=loss_fn,
+            pad_idx=tgt_tokenizer.pad_token_idx,
+            output_transform=partial(loss_metric_transform, loss_type=config.training_hp.loss.type),
+            device=device,
+        ),
         "Loss": Loss(loss_fn, output_transform=partial(loss_metric_transform, loss_type=config.training_hp.loss.type)),
     }
 
@@ -329,8 +336,34 @@ def run(config, enable_log_ckpt=True):
     # Save config-lock
     save_config(config, output_dir, enable_ckpt=enable_log_ckpt)
 
-    # Run training
-    trainer.run(train_dataloader, max_epochs=config.training_hp.num_epochs)
+    # Setting up the profiler scheduler
+    # https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html#using-profiler-to-analyze-long-running-jobs
+    prof_schedule = torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1)  # It will record iterations 2
+
+    def trace_handler(p):
+        output = p.key_averages().table(sort_by="self_cuda_time_total", row_limit=10)
+        logger.info(f"Profiler results:\n{output}")
+        p.export_chrome_trace(os.path.join(config.output_dir, "trace.json"))
+        if config.s3_bucket_name is not None and enable_log_ckpt:
+            s3_upload(
+                filepath=os.path.join(config.output_dir, "trace.json"),
+                bucket=config.s3_bucket_name,
+                s3_key=f"{config.model_name}/trace.json",
+            )
+            logger.info("Uploaded trace to s3")
+
+    # Run and profile training
+    # PyTorch official tutorial on profiling: https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html
+    with torch.profiler.profile(
+        activities=activities,
+        schedule=prof_schedule,
+        on_trace_ready=trace_handler,
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+    ) as prof:
+        trainer.add_event_handler(Events.ITERATION_COMPLETED, lambda _: prof.step())
+        trainer.run(train_dataloader, max_epochs=config.training_hp.num_epochs)
 
     # Close loggers and upload local log file to s3 if configured
     if enable_log_ckpt:
@@ -351,7 +384,7 @@ def parse_args():
         "-p",
         "--path",
         type=str,
-        default="/".join(os.path.abspath(__file__).split("/")[:-1]),
+        default="/".join(os.path.abspath(__file__).split("/")[:-2]),
         help="Path to the project folder (default: this script's directory).",
     )
     parser.add_argument(
@@ -382,14 +415,21 @@ def parse_args():
         default=-1,
         help="Execution time limit defined in seconds (default: -1).",
     )
+    parser.add_argument(
+        "-mts",
+        "--max-train-samples",
+        type=int,
+        default=-1,
+        help="Maximum number of training samples to use. -1 means use all available samples (default: -1).",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
 
-    base_path = args.path if os.path.isdir(args.path) else "/".join(os.path.abspath(__file__).split("/")[:-1])
-    config_path = os.path.join(base_path, "tfs_mt/configs/config.yml")
+    base_path = args.path if os.path.isdir(args.path) else "/".join(os.path.abspath(__file__).split("/")[:-2])
+    config_path = os.path.join(base_path, "src/tfs_mt/configs/config.yml")
 
     config = OmegaConf.load(config_path)
 
@@ -399,6 +439,10 @@ if __name__ == "__main__":
     config.chosen_model_size = args.size
     config.time_limit_sec = args.time_limit if args.time_limit > 0 else -1
     config.wandb_organization = os.getenv("WANDB_ORGANIZATION")
+
+    # Apply max_train_samples if specified
+    if args.max_train_samples > 0:
+        config.dataset.max_len = args.max_train_samples
 
     # Detect Kaggle enviroment and make adjustments
     if os.path.exists("/kaggle"):
@@ -437,20 +481,7 @@ if __name__ == "__main__":
 
     config.exec_mode = args.exec_mode
 
-    # Run and profile training (PyTorch official tutorial on profiling: https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html)
-    with (
-        profile(activities=activities, profile_memory=True, record_shapes=True) as prof,
-        record_function("model_training"),
-    ):
-        if args.exec_mode == "dummy":
-            run(config, enable_log_ckpt=False)
-        elif args.exec_mode == "dev":
-            run(config, enable_log_ckpt=True)
-
-    prof.export_chrome_trace(os.path.join(config.output_dir, "trace.json"))
-    if config.s3_bucket_name is not None and args.exec_mode != "dummy":
-        s3_upload(
-            filepath=os.path.join(config.output_dir, "trace.json"),
-            bucket=config.s3_bucket_name,
-            s3_key=f"{config.model_name}/trace.json",
-        )
+    if args.exec_mode == "dummy":
+        run(config, enable_log_ckpt=False)
+    elif args.exec_mode == "dev":
+        run(config, enable_log_ckpt=True)
