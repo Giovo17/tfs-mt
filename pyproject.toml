@@ -68,8 +68,7 @@ packages = ["src/tfs_mt"]
 "src/tfs_mt" = "tfs_mt"
 
 [tool.ty.environment]
-python = "./.venv"
-python-version = "3.12"
+python-version = "3.13"
 
 [tool.ty.rules]
 unresolved-attribute = "ignore"

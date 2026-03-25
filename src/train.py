@@ -13,6 +13,7 @@ import argparse
 import gc
 import logging
 import os
+import typing
 from datetime import datetime
 from functools import partial
 from pprint import pformat
@@ -109,21 +110,26 @@ def run(config, enable_log_ckpt=True):
 
     # Resume tokenizer from pretrained and build data utils
     if config.ckpt_path_to_resume_from is not None or config.tokenizers_resume_path is not None:
-        src_tokenizer, tgt_tokenizer = resume_from_ckpt(
-            checkpoint_path=config.ckpt_path_to_resume_from
-            if config.ckpt_path_to_resume_from is not None
-            else config.tokenizers_resume_path,
-            logger=logger,
-            resume_tokenizers=True,
-            tokenizers_type=config.tokenizer.type,
+        src_tokenizer, tgt_tokenizer = typing.cast(
+            tuple[typing.Any, typing.Any],
+            resume_from_ckpt(
+                checkpoint_path=config.ckpt_path_to_resume_from
+                if config.ckpt_path_to_resume_from is not None
+                else config.tokenizers_resume_path,
+                logger=logger,
+                resume_tokenizers=True,
+                tokenizers_type=config.tokenizer.type,
+            ),
         )
-        train_dataloader, test_dataloader = build_data_utils(
-            config, src_tokenizer=src_tokenizer, tgt_tokenizer=tgt_tokenizer
+        train_dataloader, test_dataloader = typing.cast(
+            tuple[typing.Any, typing.Any],
+            build_data_utils(config, src_tokenizer=src_tokenizer, tgt_tokenizer=tgt_tokenizer),
         )
 
     else:  # Build data utils from scratch
-        train_dataloader, test_dataloader, _, _, src_tokenizer, tgt_tokenizer = build_data_utils(
-            config, return_all=True
+        train_dataloader, test_dataloader, _, _, src_tokenizer, tgt_tokenizer = typing.cast(
+            tuple[typing.Any, typing.Any, typing.Any, typing.Any, typing.Any, typing.Any],
+            build_data_utils(config, return_all=True),
         )
 
     # Save tokenizers
@@ -173,7 +179,7 @@ def run(config, enable_log_ckpt=True):
 
     logger.info(
         summary(
-            model,
+            typing.cast(torch.nn.Module, model),
             [(16, 128), (16, 128), (16, 128), (16, 128)],
             dtypes=[torch.long, torch.long, torch.bool, torch.bool],
         )
@@ -237,7 +243,7 @@ def run(config, enable_log_ckpt=True):
     }
 
     # Setup trainer and evaluator
-    trainer = setup_trainer(config, model, optimizer, lr_scheduler, loss_fn, device)
+    trainer = setup_trainer(config, typing.cast(torch.nn.Module, model), optimizer, lr_scheduler, loss_fn, device)
     test_evaluator = setup_evaluator(config, model, metrics, device)
 
     # Setup engines logger with python logging print training configurations

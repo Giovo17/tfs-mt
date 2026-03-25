@@ -10,6 +10,7 @@
 # This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
 
 import os
+import typing
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -276,7 +277,8 @@ def display_sinusoidal_signals():
     x_pin_index = 407
 
     for _, (ax, i) in enumerate(zip(axes, range(8), strict=False)):
-        signal = pos_encoder.pe_lut[:, i]
+        pe_lut_tensor = typing.cast(torch.Tensor, pos_encoder.pe_lut)
+        signal = pe_lut_tensor[:, i]
 
         ax.plot(t, signal)
 

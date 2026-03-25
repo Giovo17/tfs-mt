@@ -16,13 +16,15 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from datetime import datetime
 from logging import Logger
-from typing import Any
+from typing import Any, cast
 
 import botocore
+import botocore.exceptions
 import torch
 import torch.nn.functional as F
 from ignite.engine import DeterministicEngine, Engine, Events
 from ignite.handlers import Checkpoint, DiskSaver, ProgressBar, global_step_from_engine
+from ignite.handlers.checkpoint import BaseSaveHandler
 from ignite.handlers.early_stopping import EarlyStopping
 from ignite.handlers.time_limit import TimeLimit
 from ignite.metrics import GpuInfo
@@ -116,7 +118,8 @@ def resume_from_ckpt(
 
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
-        Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
+        if to_load is not None:
+            Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
         if logger is not None:
             logger.info("Successfully resumed from a local checkpoint: %s", checkpoint_path)
 
@@ -177,7 +180,8 @@ def resume_from_ckpt(
                         new_state_dict[new_k] = v
                     checkpoint["model"] = new_state_dict
 
-                Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
+                if to_load is not None:
+                    Checkpoint.load_objects(to_load=to_load, checkpoint=checkpoint, strict=strict)
 
                 if logger is not None:
                     logger.info(f"Successfully resumed training objects from a bucket s3 checkpoint: {checkpoint_path}")
@@ -215,7 +219,7 @@ def s3_upload(filepath: str, bucket: str, s3_key: str | None = None) -> None:
     except botocore.exceptions.ClientError as exc:
         print(f"Bucket not found - {bucket}")
         if exc.response["Error"]["Code"] == "404":
-            raise BucketNotFoundError(bucket) from exec
+            raise BucketNotFoundError(bucket) from exc
         else:
             raise
 
@@ -296,7 +300,7 @@ def setup_exp_logging(
     )
 
     wandb_logger.attach_output_handler(
-        evaluator,
+        cast(Engine, evaluator),
         event_name=Events.EPOCH_COMPLETED(every=1),
         tag="test_eval",
         metric_names=list(metrics.keys()),
@@ -359,9 +363,10 @@ def setup_handlers(
 
         # Training checkpointing.
         # Do it locally only if s3 checkpointing is disabled to save disk space in cloud instance.
+        to_save_train = to_save_train or {}
         ckpt_handler_train = Checkpoint(
             to_save_train,
-            save_handler=s3_saver if config.s3_bucket_name is not None else disk_saver,
+            save_handler=cast(BaseSaveHandler, s3_saver if config.s3_bucket_name is not None else disk_saver),
             filename_prefix=config.model_base_name,
             n_saved=config.checkpoints_retain_n,
         )
@@ -634,7 +639,7 @@ def setup_trainer(
     # It helps prevent gradients with small magnitudes from underflowing when training with mixed precision.
     # Reference: https://docs.pytorch.org/docs/stable/amp.html#gradient-scaling
     scaler = GradScaler(
-        device,
+        device.type,
         enabled=config.training_hp.use_amp and config.training_hp.amp_dtype not in ["float32", "bfloat16"],
     )
 

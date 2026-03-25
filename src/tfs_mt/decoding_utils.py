@@ -9,6 +9,8 @@
 #
 # This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
 
+import typing
+
 import numpy as np
 import torch
 
@@ -78,7 +80,7 @@ def greedy_decoding(
     is_decoded = [False] * encoder_representation.shape[0]
 
     while True:
-        tgt_mask = tgt_tokenizer.encode(tgt_sequence_batch, return_only_mask=True)
+        tgt_mask = typing.cast(torch.Tensor, tgt_tokenizer.encode(tgt_sequence_batch, return_only_mask=True))
 
         # Due to cross attention max tgt sequences cannot be longer than max src sequences
         if tgt_sequence_batch.shape[1] > encoder_representation.shape[1]:
@@ -156,4 +158,4 @@ def beam_decoding(
     TBA
     """
 
-    pass
+    raise NotImplementedError()
