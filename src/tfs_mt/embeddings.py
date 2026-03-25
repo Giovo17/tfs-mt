@@ -11,6 +11,7 @@
 
 import math
 import os
+import typing
 
 import torch
 import torch.nn as nn
@@ -126,6 +127,8 @@ class Embedding(nn.Module):
             embeddings_lut.weight.data = embeddings_lut.weight.data * rescale_coeff
 
         else:
+            if d_model is None:
+                raise EmbeddingDimError(d_model, from_pretrained)
             embeddings_dim = d_model
             # Randomly initialized lookup table.
             embeddings_lut = nn.Embedding(vocab_size, embeddings_dim)
@@ -237,10 +240,11 @@ class SinusoidalPositionalEncoding(nn.Module):
         Returns:
             Float[torch.Tensor, "B S D"]: Token embeddings with added positional information.
         """
-        if token_embeddings.ndim != 3 or token_embeddings.size(-1) != self.pe_lut.shape[1]:
+        pe_lut_tensor = typing.cast(torch.Tensor, self.pe_lut)
+        if token_embeddings.ndim != 3 or token_embeddings.size(-1) != pe_lut_tensor.shape[1]:
             raise IncompatibleEmbeddingsDimError(token_embeddings.shape)
 
-        positional_encodings = self.pe_lut[: token_embeddings.size(1)]
+        positional_encodings = pe_lut_tensor[: token_embeddings.size(1)]
 
         # we apply dropout to the sums of the embeddings and the positional encodings in both the encoder and decoder stacks (Attention is all you need page 8)
         final_embedding = self.dropout(token_embeddings + positional_encodings)

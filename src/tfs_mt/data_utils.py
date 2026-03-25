@@ -13,6 +13,7 @@ import json
 import os
 import re
 import string
+import typing
 import zipfile
 from abc import ABC, abstractmethod
 from collections import Counter
@@ -81,7 +82,7 @@ class BaseTokenizer(ABC):
         pass
 
     @abstractmethod
-    def build_vocab(self) -> None:
+    def build_vocab(self, *args, **kwargs) -> None:
         pass
 
     @classmethod
@@ -107,7 +108,7 @@ class BaseTokenizer(ABC):
         pass
 
     @abstractmethod
-    def decode(self, tokens: list[int] | np.ndarray) -> list[str]:
+    def decode(self, token_ids: np.ndarray | list[int]) -> list[str]:
         pass
 
 
@@ -161,7 +162,7 @@ class WordTokenizer(BaseTokenizer):
     def __init__(
         self,
         special_tokens: dict[str, str] | None = None,
-        contractions: list[str, str] | None = None,
+        contractions: list[str] | None = None,
         tokenizer_max_len: int = 128,
         max_vocab_size: int = 100_000,
     ):
@@ -264,7 +265,7 @@ class WordTokenizer(BaseTokenizer):
 
         return tokenizer
 
-    def to_json(self, output_path: str) -> None:
+    def to_json(self, path: str) -> None:
         if self.vocab_size == 0:
             raise VocabNotBuiltError()
 
@@ -275,7 +276,7 @@ class WordTokenizer(BaseTokenizer):
             "vocab": self.vocab,
         }
 
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(to_save, f, ensure_ascii=False, indent=2)
 
     def build_vocab(
@@ -499,7 +500,7 @@ class WordTokenizer(BaseTokenizer):
 
         return token_ids, mask
 
-    def decode(self, token_ids: np.ndarray | list[str]) -> list[str]:
+    def decode(self, token_ids: np.ndarray | list[int]) -> list[str]:
         """Decode token IDs.
         Returns the unknown token if the input token is not present in the vocabulary.
 
@@ -518,7 +519,15 @@ class WordTokenizer(BaseTokenizer):
 
 
 class BPETokenizer(BaseTokenizer):
-    pass
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ):
+        pass
+
+    def build_vocab(self, *args, **kwargs) -> None:
+        pass
 
 
 class TranslationDataset(Dataset):
@@ -632,13 +641,13 @@ class TranslationDataset(Dataset):
     def __len__(self):
         return len(self.src_texts)
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor | str]:
-        src_tokens = self.src_encoded_sequences[idx]
-        tgt_tokens = self.tgt_encoded_sequences[idx]
-        src_mask = self.src_masks[idx]
-        tgt_mask = self.tgt_masks[idx]
-        src_text = self.src_texts[idx]
-        tgt_text = self.tgt_texts[idx]
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
+        src_tokens = self.src_encoded_sequences[index]
+        tgt_tokens = self.tgt_encoded_sequences[index]
+        src_mask = self.src_masks[index]
+        tgt_mask = self.tgt_masks[index]
+        src_text = self.src_texts[index]
+        tgt_text = self.tgt_texts[index]
 
         return {
             "src": torch.tensor(src_tokens, dtype=torch.long),
@@ -651,7 +660,7 @@ class TranslationDataset(Dataset):
 
 
 def batch_collate_fn(
-    batch: dict[str, torch.Tensor | list[str]],
+    batch: list[dict[str, torch.Tensor | str]],
     src_pad_token_id: int,
     tgt_pad_token_id: int,
     pad_all_to_len: int = -1,
@@ -700,7 +709,9 @@ def batch_collate_fn(
                 if num_padding_values >= 0:
                     field_data[0] = F.pad(field_data[0], (0, num_padding_values), value=pad_token_id)
 
-            padded_seq = pad_sequence(field_data, batch_first=True, padding_value=pad_token_id)
+            padded_seq = pad_sequence(
+                typing.cast(list[torch.Tensor], field_data), batch_first=True, padding_value=pad_token_id
+            )
             result[key] = padded_seq
         else:  # src_text and tgt_text
             result[key] = field_data
@@ -766,7 +777,7 @@ def build_data_utils(
 
     else:
         print("Building tokenizers and vocabularies...")
-        tok_types_dict = {"word": WordTokenizer, "bpe": BPETokenizer}
+        tok_types_dict: dict[str, typing.Any] = {"word": WordTokenizer, "bpe": BPETokenizer}
         src_tokenizer = tok_types_dict[config.tokenizer.type](
             special_tokens,
             tokenizer_max_len=config.tokenizer.max_seq_len,

@@ -22,6 +22,7 @@ from typing import Any
 
 import boto3
 import botocore
+import botocore.exceptions
 import ignite.distributed as idist
 import torch
 from botocore.client import BaseClient
@@ -120,7 +121,7 @@ class S3Saver(BaseSaveHandler):
             self.s3.head_bucket(Bucket=self.bucket)
         except botocore.exceptions.ClientError as exc:
             if exc.response["Error"]["Code"] == "404":
-                raise BucketNotFoundError(self.bucket) from exec
+                raise BucketNotFoundError(self.bucket) from exc
             else:
                 raise
 
