@@ -86,7 +86,7 @@ $$
 where $\quad head_i = Attention(XW_i^Q, XW_i^K, XW_i^V)$
 
 
-An important detail in this project is the handling of the model dimension $d_{model}$. Standard Transformers often require $d_{model}$ to be divisible by the number of heads. However the code relaxes this constraint in order to support pretrained embeddings like GloVe, which come in fixed sizes: 50, 100, 200 and 300. It projects the input $X$ to spaces of dimensions $d_{model} \times A * d_{head}$[^3] and uses an output projection matrix $W^O \in \mathbb{R}^{A * d_{head}, d_{model}}$ to map the concatenated results back to the original $d_{model}$, ensuring mathematical consistency regardless of the input size.
+An important detail in this project is the handling of the model dimension $d_{model}$. Standard Transformers often require $d_{model}$ to be divisible by the number of heads. However the code relaxes this constraint in order to support pretrained embeddings like GloVe, which come in fixed sizes: 50, 100, 200 and 300. It projects the input $X$ to spaces of dimensions $d_{model} \times A * d_{head}$[^3] and uses an output projection matrix $W^O \in \mathbb{R}^{A * d_{head}, d_{model}}$ to map the concatenated results back to the original $d_{model}$, ensuring both input and output vector of an attention block have always the same size.
 
 ## Attention Types and Masking Strategies
 
